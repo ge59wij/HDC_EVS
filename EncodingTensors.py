@@ -6,26 +6,11 @@ from torchhd.embeddings import Random
 from torchhd.models import Centroid
 import torchmetrics
 from tqdm import tqdm  # For the progress bar
-from tabulate import tabulate
-from Chifoumi_to_Pytensors import EventDatasetLoader
+from Chifoumi_to_Pytensors import EventDatasetLoader, print_summary_table
 
-
-def print_summary_table(train_dataset, val_dataset, test_dataset, batch_size, num_epochs, dimensions, height, width):
-    table = [
-        ["Training Samples", len(train_dataset)],
-        ["Validation Samples", len(val_dataset)],
-        ["Test Samples", len(test_dataset)],
-        ["Batch Size", batch_size],
-        ["Number of Epochs", num_epochs],
-        ["Hypervector Dimensions", dimensions],
-        ["Frame Height", height],
-        ["Frame Width", width]
-    ]
-    print("\nDataset and Training Configuration Summary:")
-    print(tabulate(table, tablefmt="grid"))
 
 DIMENSIONS = 8000
-MAX_TIME = 150      # Maximum time bins
+MAX_TIME = 190      # Maximum time bins, other has 150, when i turn this to 150 it takes so long
 HEIGHT = 120
 WIDTH = 160
 BATCH_SIZE = 1
@@ -117,49 +102,16 @@ def main():
     train_dataset = EventDatasetLoader(dataset_path, "train")
     val_dataset   = EventDatasetLoader(dataset_path, "val")
     test_dataset  = EventDatasetLoader(dataset_path, "test")
-
-    #
-    #multiple workers to speed up reading.
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True
-    )
-
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
+    print_summary_table(train_dataset, val_dataset, test_dataset, batch_size=BATCH_SIZE, num_epochs=NUM_EPOCHS, dimensions=DIMENSIONS, height=HEIGHT, width=WIDTH)
     # SpatioTemporal MAP encoder
     encoder = SpatioTemporalEncoder( DIMENSIONS, MAX_TIME, HEIGHT, WIDTH, device=device    )
-
     # HD Centroid model (3 classes: paper, rock, scissor), for now built in centroid
     model = Centroid(DIMENSIONS, 3).to(device)
-
     accuracy_metric = torchmetrics.Accuracy(task="multiclass", num_classes=3).to(device)
 
-    print_summary_table(
-        train_dataset,
-        val_dataset,
-        test_dataset,
-        batch_size=1,  # Update if you change batch size
-        num_epochs=NUM_EPOCHS,
-        dimensions=DIMENSIONS,
-        height=HEIGHT,
-        width=WIDTH,
-    )
     ############################################################################
     # Training Loop
     ############################################################################
@@ -167,7 +119,6 @@ def main():
     model.train()
     for epoch in range(NUM_EPOCHS):
         train_iter = tqdm(train_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [Train]", leave=True)
-
         for (hist_tensor, label) in train_iter:
             hist_tensor = hist_tensor.squeeze(0)  # shape [T, 2, H, W]
             # Move to GPU
@@ -187,7 +138,6 @@ def main():
     print("Validating...")
     model.eval()
     accuracy_metric.reset()
-
     val_iter = tqdm(val_loader, desc="Validation", leave=True)
     with torch.no_grad():
         for (hist_tensor, label) in val_iter:
@@ -201,7 +151,6 @@ def main():
 
     val_acc = accuracy_metric.compute().item()
     print(f"Validation Accuracy: {val_acc*100:.2f}%")
-
     ############################################################################
     # Test Loop
     ############################################################################
@@ -214,14 +163,11 @@ def main():
         for (hist_tensor, label) in test_iter:
             hist_tensor = hist_tensor.squeeze(0).to(device)
             label = label.to(device)
-
             hv = encoder(hist_tensor)
             outputs = model(hv.unsqueeze(0), dot=True)
             preds = outputs.argmax(dim=1)
             accuracy_metric.update(preds, label)
-
     test_acc = accuracy_metric.compute().item()
     print(f"Test Accuracy: {test_acc*100:.2f}%")
-
 if __name__ == "__main__":
     main()
