@@ -8,8 +8,8 @@ import torch
 
 class EventDatasetLoader:
     """
-    Dataset loader for RNN-style event data (Prophesee style), handling HDF5 (.h5 ) event tensors and NPY label files.
-    Single root dir containing train/val/test splits, label_map_dictionary.json for label mappings.
+    Dataset loader for RNN-style event dataset (Prophesee style), handling HDF5 (.h5 ) event tensors and NPY label files.
+    Single root dir should contain train/val/test splits, label_map_dictionary.json
     """
 
     def __init__(self, root_dir, split):
@@ -44,7 +44,7 @@ class EventDatasetLoader:
         """
         Matches HDF5 files with corresponding NPY files.
         Returns:
-            List of tuples: [(h5_file, npy_file), ...]
+            List of tuples: [(h5_file, npy_file)]
         """
         pairs = []
         for h5_file in self.h5_files:
@@ -56,39 +56,39 @@ class EventDatasetLoader:
     def load_sample(self, h5_path, npy_path):
         """
         Loads a single sample from an HDF5 file and its corresponding NPY file, convert to Pytorch Tensor, Maps class,
-
-        Args:
-            h5_path (str): Path to the HDF5 file.
-            npy_path (str): Path to the NPY file.
-
         Returns:
             tuple: (tensor_data, label_id)
         """
        # print(f"Loading H5 file: {h5_path}")
         #print(f"Loading NPY file: {npy_path}")
-
-        # Load event tensor with h5py
+        # Load event tensor
         with h5py.File(h5_path, 'r') as f:
-            np_tensor_data = f['data'][:]
-        #    print(f"Loaded event tensor with shape: {np_tensor_data.shape}")
+            tensor_data = f['data'][:]  # Shape [T, 2, H, W]
 
-        # Convert to PyTorch tensor
-        tensor_data = torch.tensor(np_tensor_data, dtype=torch.float32)
-
-        # Load bbox data using NumPy
+        # Load bbox data
         bbox_data = np.load(npy_path, allow_pickle=True)
         if len(bbox_data) == 0:
             raise ValueError(f"Empty bbox data in {npy_path}")
-        #print(f"Loaded bbox data: {bbox_data}")
 
         # Extract class name and map it to class ID
-        class_name = str(int(bbox_data[0][5]))  # Assuming class is in the 6th column
+        class_name = str(int(bbox_data[0][5]))  # Assuming the class name is the 6th element
         class_id = self.label_map.get(class_name, -1)
         if class_id == -1:
             raise ValueError(f"Class {class_name} not found in label map!")
+        class_id = int(class_name)
 
-        #print(f"Mapped class name '{class_name}' to class ID: {class_id}")
-        return tensor_data, int(class_name)
+        MAX_TIME = 150
+
+        T, C, H, W = tensor_data.shape
+        if T < MAX_TIME:
+            # Pad with zeros along the time dimension
+            padding = np.zeros((MAX_TIME - T, C, H, W), dtype=tensor_data.dtype)
+            tensor_data = np.concatenate((tensor_data, padding), axis=0)
+        elif T > MAX_TIME:
+            # Truncate along the time dimension
+            tensor_data = tensor_data[:MAX_TIME]
+
+        return torch.tensor(tensor_data, dtype=torch.float32), torch.tensor(class_id, dtype=torch.long)
 
     def __len__(self):
         return len(self.file_pairs)
@@ -99,8 +99,11 @@ class EventDatasetLoader:
 
 
 if __name__ == "__main__":
-    dataset_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/"
-    train_loader = EventDatasetLoader(dataset_path, "train") #train, test, val
+    dataset_path = "/space/chair-nas/tosy/Simple_chifoumi/" #"/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/"
+
+
+    #train_loader = EventDatasetLoader(dataset_path, "train") #train, test, val
+
     '''
     # Debugging:
     indices_to_print = [1, 1001, 2043]

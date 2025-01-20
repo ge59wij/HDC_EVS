@@ -1,19 +1,36 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torchhd
 from torchhd.embeddings import Random
 from torchhd.models import Centroid
 import torchmetrics
 from tqdm import tqdm  # For the progress bar
+from tabulate import tabulate
 from Chifoumi_to_Pytensors import EventDatasetLoader
 
-DIMENSIONS = 8000   # HD dimension (tweak as you like)
-MAX_TIME   = 600    # maximum time bins expected
-HEIGHT     = 120
-WIDTH      = 160
+
+def print_summary_table(train_dataset, val_dataset, test_dataset, batch_size, num_epochs, dimensions, height, width):
+    table = [
+        ["Training Samples", len(train_dataset)],
+        ["Validation Samples", len(val_dataset)],
+        ["Test Samples", len(test_dataset)],
+        ["Batch Size", batch_size],
+        ["Number of Epochs", num_epochs],
+        ["Hypervector Dimensions", dimensions],
+        ["Frame Height", height],
+        ["Frame Width", width]
+    ]
+    print("\nDataset and Training Configuration Summary:")
+    print(tabulate(table, tablefmt="grid"))
+
+DIMENSIONS = 8000
+MAX_TIME = 150      # Maximum time bins
+HEIGHT = 120
+WIDTH = 160
+BATCH_SIZE = 1
 NUM_EPOCHS = 1
+
 ##############################################################################
 ####################SpatioTemporal Encoder
 ##############################################################################
@@ -95,47 +112,54 @@ class SpatioTemporalEncoder(nn.Module):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    dataset_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/"
+    dataset_path = "/space/chair-nas/tosy/Simple_chifoumi/"
     print("Loading Dataset")
     train_dataset = EventDatasetLoader(dataset_path, "train")
     val_dataset   = EventDatasetLoader(dataset_path, "val")
     test_dataset  = EventDatasetLoader(dataset_path, "test")
 
     #
-    #batch_size=1 to avoids complicated padding for variable T, add padding later
     #multiple workers to speed up reading.
     train_loader = DataLoader(
         train_dataset,
-        batch_size=1,
+        batch_size=BATCH_SIZE,
         shuffle=True,
         num_workers=4,
         pin_memory=True
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=1,
+        batch_size=BATCH_SIZE,
         shuffle=False,
         num_workers=4,
         pin_memory=True
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_size=1,
+        batch_size=BATCH_SIZE,
         shuffle=False,
         num_workers=4,
         pin_memory=True
     )
 
     # SpatioTemporal MAP encoder
-    encoder = SpatioTemporalEncoder(
-        DIMENSIONS, MAX_TIME, HEIGHT, WIDTH, device=device
-    )
+    encoder = SpatioTemporalEncoder( DIMENSIONS, MAX_TIME, HEIGHT, WIDTH, device=device    )
 
     # HD Centroid model (3 classes: paper, rock, scissor), for now built in centroid
     model = Centroid(DIMENSIONS, 3).to(device)
 
     accuracy_metric = torchmetrics.Accuracy(task="multiclass", num_classes=3).to(device)
 
+    print_summary_table(
+        train_dataset,
+        val_dataset,
+        test_dataset,
+        batch_size=1,  # Update if you change batch size
+        num_epochs=NUM_EPOCHS,
+        dimensions=DIMENSIONS,
+        height=HEIGHT,
+        width=WIDTH,
+    )
     ############################################################################
     # Training Loop
     ############################################################################
