@@ -8,8 +8,7 @@ def print_summary_table(train_dataset, val_dataset, test_dataset, batch_size, nu
         ["Batch Size", batch_size],
         ["Number of Epochs", num_epochs],
         ["Hypervector Dimensions", dimensions],
-        ["Frame Height", height],
-        ["Frame Width", width],
+        ["Dims", height, "x" , width],
     ]
     print("\nDataset and Training Configuration Summary:")
-    print(tabulate(table, headers="firstrow"))
+    print(tabulate(table))

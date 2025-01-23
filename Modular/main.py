@@ -3,31 +3,28 @@ from utils import print_summary_table
 from Modular.HDCencoding.Encoding1 import Encoding1
 
 def main():
-    # Paths and configuration
-    dataset_path = "/space/chair-nas/tosy/Simple_chifoumi/"
-    encoding_method = Encoding1  # Choose Encoding1 or Encoding2
+    dataset_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized"
+
+    encoding_method = Encoding1
 
     # Load datasets
     train_dataset = EventDatasetLoader(dataset_path, "train")
     val_dataset = EventDatasetLoader(dataset_path, "val")
     test_dataset = EventDatasetLoader(dataset_path, "test")
+    DIMENSIONS = 8000
+    MAX_TIME = 150
+    HEIGHT = 120
+    WIDTH = 160
+    BATCHES = 32
+    NUM_EPOCHS = 3
+
+
 
     # Initialize encoding
-    encoder = encoding_method(
-        dimensions=8000, max_time=150, height=120, width=160
-    )
+    #encoder = encoding_method(dimensions= DIMENSIONS, max_time= MAX_TIME, height=HEIGHT, width=WIDTH)
+    encoder = encoding_method(dimensions= DIMENSIONS, max_time= MAX_TIME, height=HEIGHT, width=WIDTH,  )
 
-    # Print summary
-    print_summary_table(
-        train_dataset,
-        val_dataset,
-        test_dataset,
-        batch_size=1,
-        num_epochs=10,
-        dimensions=8000,
-        height=120,
-        width=160,
-    )
+    print_summary_table( train_dataset, val_dataset, test_dataset, batch_size= BATCHES, num_epochs= NUM_EPOCHS , dimensions=DIMENSIONS, height=HEIGHT, width=WIDTH, )
 
     # Train and evaluate
     encoder.train(train_dataset, val_dataset)

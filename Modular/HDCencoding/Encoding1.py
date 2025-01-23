@@ -13,13 +13,13 @@ class Encoding1:
         self.height = height
         self.width = width
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         self.model = Centroid(dimensions, 3).to(self.device)
         self.accuracy_metric = torchmetrics.Accuracy(task="multiclass", num_classes=3).to(self.device)
 
     def train(self, train_dataset, val_dataset):
         train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
+        test_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
 
         print("Training started...")
         for epoch in range(10):  # Example: 10 epochs
@@ -37,24 +37,23 @@ class Encoding1:
         self._validate(val_loader)
 
     def encode(self, hist_tensor):
-        # Custom encoding logic (simplified for brevity)
         return torch.rand(self.dimensions, device=self.device)
 
-    def _validate(self, val_loader):
-        print("Validating...")
+    def _validate(self, data_loader, mode="Validation"):
+        print(f"{mode}...")
         self.model.eval()
         self.accuracy_metric.reset()
 
         with torch.no_grad():
-            for hist_tensor, label in val_loader:
+            for hist_tensor, label in data_loader:
                 hist_tensor = hist_tensor.to(self.device)
                 label = label.to(self.device)
                 hv = self.encode(hist_tensor)
                 preds = self.model(hv.unsqueeze(0), dot=True).argmax(dim=1)
                 self.accuracy_metric.update(preds, label)
 
-        val_acc = self.accuracy_metric.compute().item()
-        print(f"Validation Accuracy: {val_acc:.2%}")
+        accuracy = self.accuracy_metric.compute().item()
+        print(f"{mode} Accuracy: {accuracy:.2%}")
 
     def evaluate(self, test_dataset):
         test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
