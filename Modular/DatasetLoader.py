@@ -8,11 +8,12 @@ from torch.utils.data import Dataset
 
 
 class EventDatasetLoader(Dataset):
-    def __init__(self, root_dir, split, max_time=150):
+    def __init__(self, root_dir, split, max_time):
         self.root_dir = root_dir
         self.split_dir = os.path.join(root_dir, split)
         self.max_time = max_time
         self.label_map = self._load_label_map()
+        self.num_classes = len(self.label_map)
         self.h5_files = sorted(glob.glob(os.path.join(self.split_dir, '*.h5')))
         self.file_pairs = self._get_file_pairs()
 

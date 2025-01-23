@@ -1,34 +1,55 @@
 from Modular.DatasetLoader import EventDatasetLoader
-from utils import print_summary_table
+from utils import validate_dataset_path, validate_classes , print_summary_table
+
 from Modular.HDCencoding.Encoding1 import Encoding1
+from Modular.HDCencoding.Encoding2 import Encoding2
+from torch.utils.data import DataLoader # Using PyTorch DataLoader for batching and shuffling
+import os
+import torch
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+DIMENSIONS = 8000
+MAX_TIME = 150
+HEIGHT = 120
+WIDTH = 160
+NUM_EPOCHS = 3
+BATCH_SIZE = 32
+NUM_WORKERS = 4
+
+
+HDC_method = Encoding2  ####here enc
+
 
 def main():
     dataset_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized"
-
-    encoding_method = Encoding1
+    validate_dataset_path(dataset_path)
 
     # Load datasets
-    train_dataset = EventDatasetLoader(dataset_path, "train")
-    val_dataset = EventDatasetLoader(dataset_path, "val")
-    test_dataset = EventDatasetLoader(dataset_path, "test")
-    DIMENSIONS = 8000
-    MAX_TIME = 150
-    HEIGHT = 120
-    WIDTH = 160
-    BATCHES = 32
-    NUM_EPOCHS = 3
+    train_dataset = EventDatasetLoader(dataset_path, "train", MAX_TIME)
+    val_dataset = EventDatasetLoader(dataset_path, "val", MAX_TIME)
+    test_dataset = EventDatasetLoader(dataset_path, "test", MAX_TIME)
+    num_classes = train_dataset.num_classes
+    validate_classes(num_classes)
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
+
+    print_summary_table(train_dataset, val_dataset, test_dataset, batch_size=BATCH_SIZE,
+                        num_epochs=NUM_EPOCHS, dimensions=DIMENSIONS, height=HEIGHT, width=WIDTH)
 
 
+    # Init Encoding
+    encoder = HDC_method(dimensions=DIMENSIONS, max_time=MAX_TIME, height=HEIGHT, width=WIDTH,
+                         batch_size=BATCH_SIZE, num_epochs=NUM_EPOCHS, num_classes=num_classes).to(device)
 
-    # Initialize encoding
-    #encoder = encoding_method(dimensions= DIMENSIONS, max_time= MAX_TIME, height=HEIGHT, width=WIDTH)
-    encoder = encoding_method(dimensions= DIMENSIONS, max_time= MAX_TIME, height=HEIGHT, width=WIDTH,  )
 
-    print_summary_table( train_dataset, val_dataset, test_dataset, batch_size= BATCHES, num_epochs= NUM_EPOCHS , dimensions=DIMENSIONS, height=HEIGHT, width=WIDTH, )
+    # Training + val and evaluate
+    encoder.train(train_loader, val_loader)
+    encoder.evaluate(test_loader)
 
-    # Train and evaluate
-    encoder.train(train_dataset, val_dataset)
-    encoder.evaluate(test_dataset)
 
 if __name__ == "__main__":
     main()
