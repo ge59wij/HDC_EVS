@@ -5,6 +5,8 @@ from torchhd import embeddings, bind, normalize, multiset
 from torchhd.models import Centroid
 import torchmetrics
 from tqdm import tqdm
+import time
+
 """
 Encoding2: Spatial-Temporal Hypervector Encoding, Centroid
 #Spatial and Temporal Encoding:
@@ -92,13 +94,23 @@ class Encoding2(nn.Module):
                 print(f"Epoch {epoch + 1}/{self.num_epochs}")
 
                 # Training loop
-                for data, targets in tqdm(train_loader, desc="Training"):
+                start_time = time.time()  #debug
+                #for data, targets in tqdm(train_loader, desc="Training"):
+                for i, (data, targets) in enumerate(tqdm(train_loader, desc="Training")):
+
+                    batch_start_time = time.time()  # Start the timer for each batch
                     data, targets = data.to(next(self.parameters()).device), targets.to(next(self.parameters()).device)
 
                     sample_hv = self.encode(data)  # Encode input data
                     self.centroid_model.add(sample_hv, targets)  # Add to centroids
+                    # Print batch processing time every 50 batches
+
+                    if i % 50 == 0:
+                        print(f"Batch {i}: {time.time() - batch_start_time:.2f}s")
 
                 self.centroid_model.normalize()  # Normalize centroids for inference
+
+                print(f"Epoch {epoch + 1} completed in {time.time() - start_time:.2f}s")
 
                 # Validation step
                 print("Validating...")

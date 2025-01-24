@@ -11,6 +11,7 @@ import torch
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using", device)
 
 
 DIMENSIONS = 8000
@@ -19,7 +20,7 @@ HEIGHT = 120
 WIDTH = 160
 NUM_EPOCHS = 3
 BATCH_SIZE = 1 #32 still padding issue
-NUM_WORKERS = 8  #number of subprocesses (CPU threads) used for loading data from dataset into batches during training, 32 available
+NUM_WORKERS = 16  #number of subprocesses (CPU threads) used for loading data from dataset into batches during training, 32 available
 
 
 
