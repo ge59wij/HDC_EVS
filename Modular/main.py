@@ -14,12 +14,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using", device)
 
 
-DIMENSIONS = 8000
-MAX_TIME = 150
+DIMENSIONS = 10000
+MAX_TIME = 170
 HEIGHT = 120
 WIDTH = 160
-NUM_EPOCHS = 3
-BATCH_SIZE = 8 #32 still padding issue
+NUM_EPOCHS = 20
+BATCH_SIZE = 1 #32 still padding issue time_bins varies, trim or pad, find out mean
 NUM_WORKERS = 8  #number of subprocesses (CPU threads) used for loading data from dataset into batches during training, 32 available
 
 
@@ -29,6 +29,7 @@ HDC_method = Encoding2  ####here enc
 
 def main():
     dataset_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized"
+    #dataset_path = "/space/chair-nas/tosy/Simple_chifoumi"
     validate_dataset_path(dataset_path)
 
     # Load datasets

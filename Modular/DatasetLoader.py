@@ -34,6 +34,14 @@ class EventDatasetLoader(Dataset):
         h5_path, npy_path = self.file_pairs[idx]
         with h5py.File(h5_path, 'r') as f:
             tensor_data = f['data'][:]
+
+        # Trim or pad tensor_data to max_time
+        if tensor_data.shape[0] > self.max_time:
+            tensor_data = tensor_data[:self.max_time, :, :, :]
+        else:
+            pad_size = self.max_time - tensor_data.shape[0]
+            tensor_data = np.pad(tensor_data, ((0, pad_size), (0, 0), (0, 0), (0, 0)))
+
         bbox_data = np.load(npy_path, allow_pickle=True)
         class_id = int(str(int(bbox_data[0][5])))
 

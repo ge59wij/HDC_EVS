@@ -8,28 +8,22 @@ from tqdm import tqdm
 import time
 
 """
-Encoding2: Spatial-Temporal Hypervector Encoding, Centroid
+Encoding2: Spatial-Temporal Hypervector Encoding, Centroid based
 #Spatial and Temporal Encoding:
-   - Spatial hypervectors: Initialize randomly for flattened height and width and channel
-   - Temporal hypervectors: Random permutations for time bins to capture temporal dependencie
-   - Binding: Combines spatial and temporal components to encode spatial-temporal patterns
-   - Aggregation: Multiset operation aggregates hvs across time bins. (torchhd.normalize)
+    - Spatial Hypervectors (HVs): Randomly initialized for each spatial location (flattened height x width)
+   - Temporal HVs: Random permutations for each time bin to encode temporal dependencies
+   - Binding: Combines spatial and temporal HVs using a binding operation (element-wise multiplication)
+   - Aggregation: Multiset operation combines HVs across time bins into a single representative HV for the input
    - binary (-1 or 1) hvs, (efficient similarity computation)
+   - Data Normalization and Discretization: Input histogram tensors into integer indices (maps data into levels suitable for embedding lookup)
 #Classification with Centroid:
    - Centroid model handles class hypervector bundling using `.add()`.
-   - Normalization ensures centroids are ready for inference.
-   - Predictions are made using dot-product similarity.
-#Validation and Metrics:
-   - validation after each training epoch.
-   - `torchmetrics.Accuracy` for multiclass classification evaluation.
+   - Centroids are normalized after each epoch for robust inference
+   - Predictions are made using dot-product similarity ( HVs and class centroids)
+#Validation and Metrics: torchmetrics, to follow plots matplotlib or pyplot
+   - validation after each training epoch. test with unseen data after epochs done.
 #Training:
-   - Encode spatial-temporal patterns into hvs.
-   - Train the Centroid model by bundling class-specific hvs.
-   - Normalize centroids after training.
-#Validation:
-   - after each epoch.
-#Testing:
-   -dot-product similarity.
+    Training loop iterates data, encodes them into HVs and updates the centroid model
 """
 
 
