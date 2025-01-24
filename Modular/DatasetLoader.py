@@ -36,7 +36,10 @@ class EventDatasetLoader(Dataset):
             tensor_data = f['data'][:]
         bbox_data = np.load(npy_path, allow_pickle=True)
         class_id = int(str(int(bbox_data[0][5])))
+
         return torch.tensor(tensor_data, dtype=torch.float32), torch.tensor(class_id)
+
+
 
     def __len__(self):
         return len(self.file_pairs)

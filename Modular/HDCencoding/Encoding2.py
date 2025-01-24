@@ -105,8 +105,8 @@ class Encoding2(nn.Module):
                     self.centroid_model.add(sample_hv, targets)  # Add to centroids
                     # Print batch processing time every 50 batches
 
-                    if i % 50 == 0:
-                        print(f"Batch {i}: {time.time() - batch_start_time:.2f}s")
+                    #if i % 50 == 0:
+                        #print(f"Batch {i}: {time.time() - batch_start_time:.2f}s")
 
                 self.centroid_model.normalize()  # Normalize centroids for inference
 

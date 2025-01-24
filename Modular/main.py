@@ -19,8 +19,8 @@ MAX_TIME = 150
 HEIGHT = 120
 WIDTH = 160
 NUM_EPOCHS = 3
-BATCH_SIZE = 1 #32 still padding issue
-NUM_WORKERS = 16  #number of subprocesses (CPU threads) used for loading data from dataset into batches during training, 32 available
+BATCH_SIZE = 8 #32 still padding issue
+NUM_WORKERS = 8  #number of subprocesses (CPU threads) used for loading data from dataset into batches during training, 32 available
 
 
 
