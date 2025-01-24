@@ -10,12 +10,12 @@ import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-DIMENSIONS = 8000
+DIMENSIONS = 80
 MAX_TIME = 150
 HEIGHT = 120
 WIDTH = 160
 NUM_EPOCHS = 3
-BATCH_SIZE = 32
+BATCH_SIZE = 1 #32 still padding issue
 NUM_WORKERS = 4
 
 
@@ -49,6 +49,7 @@ def main():
     # Training + val and evaluate
     encoder.train(train_loader, val_loader)
     encoder.evaluate(test_loader)
+
 
 
 if __name__ == "__main__":
