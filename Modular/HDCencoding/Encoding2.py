@@ -51,38 +51,37 @@ class Encoding2(nn.Module):
 
     def encode(self, data):
         """
-    Encode spatial, temporal, and channel components into hypervectors.
+        Encodes spatial, temporal, and channel components into hypervectors.
         data: Input histogram tensor of shape (batch_size, time_bins, channels, height, width)
-    Returns: Encoded hypervectors of shape (batch_size, dimensions)
-    """
-        #print(f"Data shape: {data.shape}") ####debug torch.Size([1, 172, 2, 120, 160]) [batch, timebins, channels, height and weight)
+        Returns: Encoded hypervectors of shape (batch_size, dimensions)
+        """
         batch_size, time_bins, channels, height, width = data.shape
 
-        data = data.flatten(3).flatten(2)  # Combine height and width   # Combine channels with spatial dimensions
-
+        # Flatten spatial dimensions
+        data = data.flatten(3).flatten(2)  # Combine height, width, and channels ( tensor flattening)
         num_levels = 256
 
         # Normalize and discretize data into indices
         data = (data / data.max(dim=-1, keepdim=True).values) * (num_levels - 1)
-        indices = data.round().long()  # Convert to integer indices
-
+        indices = data.round().long()
 
         hv = []
+        for t in range(min(time_bins, self.max_time)):
+            # Temporal hypervector
+            t_tensor = torch.tensor([t], dtype=torch.long, device=indices.device)
+            temporal_hv = self.temporal(t_tensor)  # Shape: (batch_size, dimensions)
 
-        # Store encoded hvs for each time bin
+            # Spatial hypervector
+            spatial_hv = self.spatial(indices[:, t])  # Shape: (batch_size, spatial_size, dimensions)
+            spatial_hv = multiset(spatial_hv)  # Aggregate to (batch_size, dimensions)
 
-        for t in range(time_bins): # Uses indices for spatial embedding and bind with temporal hypervector
-            t_tensor = torch.tensor([t], dtype=torch.long, device=data.device)
-            temporal_hv = self.temporal(t_tensor)
-            spatial_hv = bind(self.spatial(indices[:, t]), temporal_hv)
-            assert indices[:, t].min() >= 0, "Indices contain negative values!"
-            assert indices[:, t].max() < (
-                        self.width * self.height), f"Indices exceed spatial embedding range! Max index: {indices[:, t].max()}"
-            #spatial_hv = bind(self.spatial(indices), self.temporal(t)) #bind(self.spatial(data[:, t]), self.temporal[t])  # Spatial + temporal hvs binding => spatial-temporal
-            hv.append(spatial_hv)
+            # Combine spatial and temporal hypervectors
+            combined_hv = bind(spatial_hv, temporal_hv)  # Shape: (batch_size, dimensions)
+            hv.append(combined_hv)
 
-        hv = multiset(torch.stack(hv, dim=1))  # Aggregate across time bins "Multiset of input hvs"
-        return normalize(hv)  #  Normalize to -1 and 1
+        # Aggregate across time bins
+        hv = multiset(torch.stack(hv, dim=1))  # Shape: (batch_size, dimensions)
+        return normalize(hv)  # Shape: (batch_size, dimensions)
 
     def train(self, train_loader, val_loader):
         """Train the Centroid model using encoded hypervectors and validate."""

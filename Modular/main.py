@@ -1,3 +1,5 @@
+from torch.onnx import export
+
 from Modular.DatasetLoader import EventDatasetLoader
 from utils import validate_dataset_path, validate_classes , print_summary_table
 
@@ -7,16 +9,18 @@ from torch.utils.data import DataLoader # Using PyTorch DataLoader for batching 
 import os
 import torch
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-DIMENSIONS = 80
+DIMENSIONS = 8000
 MAX_TIME = 150
 HEIGHT = 120
 WIDTH = 160
 NUM_EPOCHS = 3
 BATCH_SIZE = 1 #32 still padding issue
-NUM_WORKERS = 4
+NUM_WORKERS = 8  #number of subprocesses (CPU threads) used for loading data from dataset into batches during training, 32 available
+
 
 
 HDC_method = Encoding2  ####here enc
