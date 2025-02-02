@@ -5,20 +5,17 @@ import torchhd
 from torchhd.embeddings import Random
 from torchhd.models import Centroid
 import torchmetrics
-from tqdm import tqdm  # For the progress bar
+from tqdm import tqdm
 from Chifoumi_to_Pytensors import EventDatasetLoader, print_summary_table
 
 
 DIMENSIONS = 8000
-MAX_TIME = 190      # Maximum time bins, other has 150, when i turn this to 150 it takes so long
+MAX_TIME = 150     # Maximum time bins, other has 150, when i turn this to 150 it takes so long
 HEIGHT = 120
 WIDTH = 160
 BATCH_SIZE = 1
 NUM_EPOCHS = 1
 
-##############################################################################
-####################SpatioTemporal Encoder
-##############################################################################
 class SpatioTemporalEncoder(nn.Module):
     def __init__(self, dimensions, max_time, height, width, device=None):
         super().__init__()
@@ -35,7 +32,7 @@ class SpatioTemporalEncoder(nn.Module):
             num_embeddings=self.max_time,
             embedding_dim=self.dimensions,
             vsa="MAP",
-            device="cpu",  # store on CPU to avoid big GPU memory usage?
+            device="cuda",  # store on CPU to avoid big GPU memory usage?
             requires_grad=False,
         )
 
@@ -43,7 +40,7 @@ class SpatioTemporalEncoder(nn.Module):
             num_embeddings=2,  # ON/OFF polarity
             embedding_dim=self.dimensions,
             vsa="MAP",
-            device="cpu",
+            device="cuda",
             requires_grad=False,
         )
 
@@ -51,7 +48,7 @@ class SpatioTemporalEncoder(nn.Module):
             num_embeddings=self.height * self.width,
             embedding_dim=self.dimensions,
             vsa="MAP",
-            device="cpu",
+            device="cuda",
             requires_grad=False,
         )
 
@@ -91,12 +88,11 @@ class SpatioTemporalEncoder(nn.Module):
         gesture_hv = torch.sign(gesture_hv)
         return gesture_hv
 
-##############################################################################
-#######training
-##############################################################################
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
     dataset_path = "/space/chair-nas/tosy/Simple_chifoumi/"
     print("Loading Dataset")
     train_dataset = EventDatasetLoader(dataset_path, "train")
@@ -132,9 +128,6 @@ def main():
     print("Finished training. Normalizing centroids...")
     model.normalize()
 
-    ############################################################################
-    # Validation Loop
-    ############################################################################
     print("Validating...")
     model.eval()
     accuracy_metric.reset()
@@ -151,13 +144,9 @@ def main():
 
     val_acc = accuracy_metric.compute().item()
     print(f"Validation Accuracy: {val_acc*100:.2f}%")
-    ############################################################################
-    # Test Loop
-    ############################################################################
     print("Testing...")
     model.eval()
     accuracy_metric.reset()
-
     test_iter = tqdm(test_loader, desc="Testing", leave=True)
     with torch.no_grad():
         for (hist_tensor, label) in test_iter:

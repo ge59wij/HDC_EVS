@@ -16,12 +16,6 @@ class EventDatasetLoader(Dataset):
                  split: str,
                  max_time: int = 150,
                  transform=None) -> None:
-        """
-        Args:
-            root_dir (str): Dataset root directory
-            split (str): Dataset split ('train', 'val', 'test')
-            max_time (int): Maximum number of time bins (default: 150)
-        """
         self.root_dir = root_dir
         self.split_dir = os.path.join(root_dir, split)
         self.max_time = max_time
@@ -110,21 +104,6 @@ def print_summary_table(train_dataset, val_dataset, test_dataset, batch_size, nu
     ]
     print("\nDataset and Training Configuration Summary:")
     print(tabulate(table))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     #train_loader = EventDatasetLoader(dataset_path, "train") #train, test, val
 

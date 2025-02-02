@@ -14,5 +14,5 @@ print("___________")
 print(data)
 
 import torchhd
-print("torchhd version:" , torchhd.__version__)
+#print("torchhd version:" , torchhd.__version__)
 
