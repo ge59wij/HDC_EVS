@@ -62,15 +62,15 @@ class GRASP_DAT_EventLoader(Dataset):
     def __getitem__(self, idx):
         dat_file, bbox_file = self.file_pairs[idx]
         bbox_data = np.load(bbox_file, allow_pickle=True)
-        start_time = int(bbox_data[0][0])  # First row, first element
+        start_time = int(bbox_data[0][0])  # First row, first element bound
         end_time = int(bbox_data[-1][0])  # Last row, first element
-        class_id = int(bbox_data[0][5])  # Class ID
+        class_id = int(bbox_data[0][5])  # Class id
         # Load and filter
         filtered_events = []
         iterator = EventsIterator(input_path=dat_file, mode="delta_t", delta_t=self.delta_t)
         for events in iterator:
             relevant_events = events[(events["t"] >= start_time) & (events["t"] <= end_time)]
-            formatted_events = [(t, (x, y), p) for x, y, p, t in relevant_events]
+            formatted_events = [(t, (x, y), p) for x, y, p, t in relevant_events]  # GraspHD p is -1 1, ours 0 1, should the same.
             filtered_events.extend(formatted_events)
 
         return filtered_events, class_id
