@@ -11,16 +11,17 @@ HDC_encoder = GestureHDEventEncoder  # GraspHDEventEncoder
 
 
 def main():
-    #root_dir = "/space/chair-nas/tosy/customdownsampled/"
-    root_dir = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized"
-    train_split, val_split, test_split = "train", "val", "test"
+    root_dir = "/space/chair-nas/tosy/customdownsampled/"
+    #root_dir = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized"
+    #train_split, val_split, test_split = "train", "val", "test"
+    train_split, val_split, test_split = "val", "val", "test"
 
-    batch_size, num_workers, num_epochs, dimensions = 1, 0, 3, 6000
-    sample_size, max_time = 20 , 2000 # heatmap
+    batch_size, num_workers, num_epochs, dimensions = 1, 0, 3, 10000
+    sample_size, max_time = 7 , 2000 # heatmap
 
     validate_dataset_path(root_dir)
     train_dataset = EventDatasetLoader(root_dir, train_split)
-    val_dataset = EventDatasetLoader(root_dir, val_split)
+    val_dataset = EventDatasetLoader(root_dir, val_split) #use val as train dataset , 2000 samples too much
     test_dataset = EventDatasetLoader(root_dir, test_split)
     num_classes = train_dataset.num_classes if hasattr(train_dataset, 'num_classes') else 3
     validate_classes(num_classes)
@@ -40,7 +41,7 @@ def main():
 
     class_centroids = train_one_epoch(train_dataloader, encoder, dimensions, num_classes, device)
 
-    validate_one_epoch(val_dataloader, encoder, class_centroids, device)
+    #validate_one_epoch(val_dataloader, encoder, class_centroids, device)
 
     evaluation(test_dataloader, encoder, class_centroids, device)
 

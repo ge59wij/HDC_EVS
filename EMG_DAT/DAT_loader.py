@@ -1,6 +1,18 @@
 ##doesnt train, dat loader encode
 #
 
+
+
+
+
+
+
+
+
+
+
+
+
 import os
 import struct
 import json
@@ -19,7 +31,7 @@ from torchhd import embeddings, bind, normalize, multiset
 from torchhd.models import Centroid
 
 class EventDatasetLoader(Dataset):
-    def __init__(self, split, device="cuda", num_workers=4):
+    def __init__(self, split, device="cuda", num_workers=1):
         self.root_dir = "/space/chair-nas/tosy/Gen3_Chifoumi_DAT/"
         self.split = split
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -66,7 +78,6 @@ class EventDatasetLoader(Dataset):
                     for (_, x_min, y_min, x_max, y_max, *_) in labels
                 ):
                     events.append((timestamp, polarity, x, y))
-
         print(f"Loaded {len(events)} filtered events from {file_path}")
         return events
 
@@ -84,7 +95,6 @@ class EventDatasetLoader(Dataset):
         else:
             print(f"Label file not found: {npy_path}")
             return None
-
     def process_file_in_memory(self, file_path):
         try:
             print(f"Processing file: {file_path}")  # Debugging statement
@@ -97,21 +107,17 @@ class EventDatasetLoader(Dataset):
             print(f"Error processing file {file_path}: {e}")
             events, labels = [], []
         return events, labels
-
     def preprocess_all_in_memory(self):
         print("Starting dataset processing in memory...")
         results = []
-
         # Process files in memory with reduced workers (testing with 4 workers)
         with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
             futures = []
             for file_path in self.event_files:
                 futures.append(executor.submit(self.process_file_in_memory, file_path))
-
             for f in tqdm(futures, total=len(self.event_files)):
                 events, labels = f.result()
                 results.append((events, labels))
-
         print("Dataset processing complete!")
         return results
 
@@ -147,6 +153,7 @@ class Encoding2(nn.Module):
             hv.append(combined_hv)
         hv = multiset(torch.stack(hv, dim=1))
         return normalize(hv)
+
 def generate_heatmap(all_data, encoder):
     print("Generating heatmap of class clusters...")
     encoded_samples = []
