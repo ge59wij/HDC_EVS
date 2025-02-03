@@ -29,14 +29,18 @@ import numpy as np
 import glob
 from torch.utils.data import Dataset
 from metavision_core.event_io import EventsIterator
+import random
 
 
-class EventDatasetLoader(Dataset):
-    def __init__(self, root_dir, split, delta_t):
+class GRASP_DAT_EventLoader(Dataset):
+    def __init__(self, root_dir, split, delta_t=10000, shuffle= True ):
         self.root_dir = root_dir
         self.split_dir = os.path.join(root_dir, split)
         self.delta_t = 10000 # to not kill memory
         self.file_pairs = self._get_file_pairs()
+        if shuffle: random.shuffle(self.file_pairs)
+
+
 
     def _get_file_pairs(self):
         pairs = []
