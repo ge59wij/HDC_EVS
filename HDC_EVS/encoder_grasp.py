@@ -42,7 +42,6 @@ def generate_time_hvs_correlated(max_time, dims, chunk_size=20):
 def generate_position_hvs(height, width, dims):
     """
     Generate a random hypervector for each pixel position (x,y).
-    Possibly do kernel-based interpolation if you want partial correlation.
     For simplicity, each (x,y) gets a unique random HV.
     """
     pos_hvs = torchhd.random(height * width, dims, "MAP")
@@ -52,7 +51,6 @@ def generate_position_hvs(height, width, dims):
 def generate_polarity_hvs(dims):
     """
     2 polarities: ON, OFF. We'll just do random HV for ON, and use its negative for OFF.
-    Or generate both random for orthogonality.
     """
     hv_on = torchhd.random(1, dims, "MAP")[0]
     hv_off = -hv_on  # Or torchhd.random_hv(1, dims, bipolar=True)[0]
