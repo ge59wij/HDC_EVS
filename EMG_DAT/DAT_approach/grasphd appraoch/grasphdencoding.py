@@ -14,41 +14,35 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         Args:
             height (int): Sensor height (number of rows).
             width (int): Sensor width (number of columns).
-            dims (int): Dimensionality of the hypervectors.
             k (int): Grid size for spatial hypervectors.
             device.
         """
-        device = device #if torch.cuda.is_available() else "cpu"  # Default to CPU if no device is specified
-        self.device = torch.device(device)
-
+        #device = device #if torch.cuda.is_available() else "cpu"  # Default to CPU if no device is specified
+        #self.device = torch.device(device)
+        device = torch.device(device) if isinstance(device, str) else device
         # Ensure the parent class is initialized with the correct device
+        print(f"Initializing encoder")
         super().__init__(height, width, dims, time_subwindow=5000, k=k, device=device) ###############50000 μs  Fewer timestamp seed hypervectors
 
     def encode_temporal(self, events, class_id):
         """
-        Perform temporal encoding of events.
-
         Temporal encoding binds spatial, polarity, and timestamp hypervectors for each event
         and bundles them across time to create a composite hypervector.
-
         Args:
             events (list): A list of events, where each event is a tuple (t, (x, y), polarity).
-            class_id (int, optional): The class ID associated with the sample (e.g., 0 for paper, 1 for rock, 2 for scissors).
-
         Returns:
-            torch.Tensor: A hypervector representing the temporally encoded events.
+            torch.Tensor
         """
         if not events:
             raise ValueError("No events provided for encoding.")
-        device = "cuda" #if torch.cuda.is_available() else "cpu"
         print(f"Temporal Encoding: Processing {len(events)} events on {self.device}...")
 
         last_timestamp = events[-1][0]  # Last event timestamp
-        time_hvs = self._generate_time_hvs(last_timestamp)  # Generate dynamic timestamp HVs
+        time_hvs = self._generate_time_hvs(last_timestamp)  # Generate dynamic timestamp HVs ##### improvement: cache them, only generate if not already, aka longer samples.
 
-        #E_list = []  # List to accumulate individual event hypervectors
+        #E_list = []
 
-        E_temporal = torch.zeros(self.dims, device=self.device)  # Initialize HV accumulator instead of list for memory
+        E_temporal = torch.zeros(self.dims, device=self.device)  # Initialize HV accumulator instead of list for memory ## this good?
 
         for event_index, event in enumerate(events):
             t, (x, y), polarity = event  # Unpack event data
@@ -57,21 +51,16 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
             P_xy = self.get_position_hv(x, y)  # Position HV
             I_hv = self.H_I_plus if polarity == 1 else self.H_I_minus  # Polarity HV
             T_ti = self.get_time_hv(t, time_hvs)  # Timestamp HV
-            torchhd.normalize(P_xy)
-            torchhd.normalize(I_hv)
-            torchhd.normalize(T_ti)
+            #todo: normalize all here?
 
-            # Debug first 5 events only
-            if event_index < 5:
+            # Debug first event
+            if event_index < 1:
                 self.debug_event(event, time_hvs)
 
-            # Bind the hypervectors and append to the list
-            #Ei = torchhd.bind(torchhd.bind(P_xy, I_hv), T_ti)
-            #E_list.append(Ei)
+
             Ei = torchhd.bind(torchhd.bind(P_xy, I_hv), T_ti)
-            torchhd.normalize(Ei)
-            E_temporal = torchhd.bundle(E_temporal, Ei)  # Incremental bundling instead of list
-            torchhd.normalize(E_temporal)
+            E_temporal = torchhd.bundle(E_temporal, Ei)
+
 
             # Perform intermediate checks every 100000 events
             if (event_index + 1) % 100000 == 0:
@@ -82,10 +71,9 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         #E_temporal = torchhd.multibundle(torch.stack(E_list))
 
         #E_temporal = torchhd.ensure_vsa_tensor(E_temporal, "MAP", )
-
         torchhd.normalize(E_temporal)
-        print(
-            f"Temporal Encoding Complete | Class ID: {class_id} | Output Shape: {E_temporal.shape} | Device: {E_temporal.device}", '\n', E_temporal)
+        print(f"Temporal Encoding Complete | Class ID: {class_id} | Output Shape: {E_temporal.shape} | Device: {E_temporal.device}", '\n', E_temporal)
+
         return E_temporal
 
     def debug_event(self, event, time_hvs):
