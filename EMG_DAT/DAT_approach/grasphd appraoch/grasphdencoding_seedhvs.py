@@ -104,6 +104,7 @@ class GraspHDseedEncoder:
         """Dynamically generates a timestamp hypervector for a given time value using interpolation."""
         # Compute the indices and ensure they are integers
         i = int(time // self.time_subwindow)
+
         i_next = min(i + 1, time_hvs.shape[0] - 1)  # Ensure i_next is within bounds
         #print(f"time: {time}, i: {i}, i_next: {i_next}, time_hvs shape: {time_hvs.shape}")
         # Get two closest timestamp hypervectors
