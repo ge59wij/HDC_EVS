@@ -4,6 +4,7 @@ from DAT_loadergrasp import GRASP_DAT_EventLoader
 import os
 import matplotlib.pyplot as plt
 import numpy as np
+
 class GraspHDseedEncoder:
     def __init__(self, height, width, dims, time_subwindow, k, device):
         print("Initializing seed Encoder...")
@@ -33,24 +34,28 @@ class GraspHDseedEncoder:
         num_cols = self.width // self.k + 1
         return torchhd.random(num_rows * num_cols, self.dims, "MAP", device=self.device).reshape(num_rows, num_cols, self.dims)
 
-    def _generate_time_hvs(self, last_timestamp):
-        #"""Generates timestamp hypervectors dynamically based on the actual last timestamp in the dataset."""##fix this
-        """Generates and caches timestamp hypervectors."""
-
+    def _generate_time_hvs(self, last_timestamp): #checks if hvs for the required timestamps between bins already exist and only interpolate when not.
         if not isinstance(last_timestamp, (float, np.float32)):
             last_timestamp = float(last_timestamp)
-
-        # Compute the number of time bins and cast it to an integer
-        print(f"Generating seed time_hvs for timestamp: {last_timestamp}")
-
         num_time_bins = int((last_timestamp // self.time_subwindow) + 1)
-        # If not cached or new bins are required
         print(f"last_timestamp: {last_timestamp}, self.time_subwindow: {self.time_subwindow}, num_time_bins: {num_time_bins}")
 
         if self.time_hvs is None or self.time_hvs.shape[0] < num_time_bins:
-            self.time_hvs = torchhd.random(num_time_bins, self.dims, "MAP", device=self.device)
-        return self.time_hvs
+            if self.time_hvs is None:
+                existing_bins = 0
+            else:
+                existing_bins = self.time_hvs.shape[0]
 
+            # Generate only the missing bins
+            new_time_hvs = torchhd.random(
+                num_time_bins - existing_bins, self.dims, "MAP", device=self.device
+            )
+            if existing_bins > 0:
+                self.time_hvs = torch.cat([self.time_hvs, new_time_hvs], dim=0)
+            else:
+                self.time_hvs = new_time_hvs
+
+        return self.time_hvs
 
     def get_position_hv(self, x, y):
         ##now: only generate (height//k + 1, width//k + 1) hypervectors instead of (height, width): On-Demand Generation
@@ -101,27 +106,43 @@ class GraspHDseedEncoder:
         return interpolated_hv
 
     def get_time_hv(self, time, time_hvs):
-        """Dynamically generates a timestamp hypervector for a given time value using interpolation."""
+        # """Dynamically generates a timestamp hypervector for a given time value using interpolation."""
         # Compute the indices and ensure they are integers
-        i = int(time // self.time_subwindow)
+        #i = int(time // self.time_subwindow)
 
-        i_next = min(i + 1, time_hvs.shape[0] - 1)  # Ensure i_next is within bounds
+        #i_next = min(i + 1, time_hvs.shape[0] - 1)  # Ensure i_next is within bounds
         #print(f"time: {time}, i: {i}, i_next: {i_next}, time_hvs shape: {time_hvs.shape}")
         # Get two closest timestamp hypervectors
+        #T_i = time_hvs[i]
+        #T_next = time_hvs[i_next]
+        # Compute interpolation factor alpha
+        #alpha_t = (time % self.time_subwindow) / self.time_subwindow if self.time_subwindow > 1 else 0.5
+        # Interpolate between the two hypervectors
+        #return (1 - alpha_t) * T_i + alpha_t * T_next
+        """
+            Dynamically generates a timestamp hypervector for a given time value using dimension-specific interpolation.
+
+            Args:
+                time (float): The timestamp of the event.
+                time_hvs (torch.Tensor): Pre-generated timestamp hypervectors for the time sub-windows.
+
+            Returns:
+                torch.Tensor: Interpolated timestamp hypervector for the given time.
+            """
+        # Compute the indices for the current time sub-window and the next one
+        i = int(time // self.time_subwindow)
+        i_next = min(i + 1, time_hvs.shape[0] - 1)  # Ensure i_next is within bounds
+        # Get the two closest timestamp seed hypervectors
         T_i = time_hvs[i]
         T_next = time_hvs[i_next]
-        # Compute interpolation factor alpha
+        # Compute interpolation factor (alpha) based on the position within the time window
         alpha_t = (time % self.time_subwindow) / self.time_subwindow if self.time_subwindow > 1 else 0.5
-        # Interpolate between the two hypervectors
-        return (1 - alpha_t) * T_i + alpha_t * T_next
-
-'''
-def interpolate_time_hv(T_start, T_end, alpha):
-    """Interpolate between two hvs based on alpha : position in time sub-window."""
-    dims = T_start.shape[0]
-    num_from_start = int((1 - alpha) * dims)
-    return torch.cat((T_start[:num_from_start], T_end[num_from_start:]), dim=0)
-
-'''
-
-
+        # Dimension-specific interpolation:
+        dims = self.dims  # Number of dimensions
+        num_from_T_i = int((1 - alpha_t) * dims)
+        num_from_T_next = dims - num_from_T_i  # Ensure the remaining dimensions add up to `dims`
+        # Create the interpolated hypervector by combining dimensions from T_i and T_next
+        interpolated_hv = torch.cat((T_i[:num_from_T_i], T_next[:num_from_T_next]), dim=0)
+        # Debugging log to confirm sizes
+        #print(f"Interpolated HV shape: {interpolated_hv.shape}, Expected dims: {self.dims}")
+        return interpolated_hv
