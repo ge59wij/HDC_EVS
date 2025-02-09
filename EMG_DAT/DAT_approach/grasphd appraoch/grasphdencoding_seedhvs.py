@@ -2,44 +2,56 @@ import torch
 import torchhd
 from DAT_loadergrasp import GRASP_DAT_EventLoader
 import os
-
-
-
+import matplotlib.pyplot as plt
+import numpy as np
 class GraspHDseedEncoder:
-    def __init__(self, height, width, dims, time_subwindow=10000, k=4, device=None):
+    def __init__(self, height, width, dims, time_subwindow, k, device):
         self.height = height
         self.width = width
         self.dims = dims
         self.time_subwindow = time_subwindow
-        self.k = k      #  window size
-        self.device = device if device else torch.device("cpu")
+        self.k = k  # Window size
+        self.device = device if device else torch.device("cpu")  # Use provided device or default to CPU
 
 
         '''6.11 Seed hvs Generation'''
 
         #1. Polarity random bipolar hvs (h I + = - h I-) :
-        self.H_I_plus = torchhd.random(1, dims, "MAP", device=self.device).float()
+        self.H_I_plus = torchhd.random(1, dims, "MAP", device=self.device).squeeze(0)
         self.H_I_minus = - self.H_I_plus
 
         #2. 2D Position HVS, kxk frame approach: "assures thatthe resulting 2D position HV preserves the spatial correlation between events in the scene."
         self.corner_hvs = self._generate_corner_hvs()
 
-        # 3. Timestamp Hypervectors: explained in Notion
-        #  time hypervectors will be generated on-demand
+        # 3. Timestamp Hypervectors: explained in Notion#wrong too random
+        #  time hypervectors will be generated on-demand#wrong
     def _generate_corner_hvs(self):
-        """Generates corner hypervectors."""
+        """Generates corner hypervectors ONCE."""
         num_rows = self.height // self.k + 1
         num_cols = self.width // self.k + 1
-        return torchhd.random(num_rows * num_cols, self.dims, "MAP", device=self.device).float() \
-                     .reshape(num_rows, num_cols, self.dims)
+        return torchhd.random(num_rows * num_cols, self.dims, "MAP", device=self.device).reshape(num_rows, num_cols, self.dims)
 
     def _generate_time_hvs(self, last_timestamp):
         """Generates timestamp hypervectors dynamically based on the actual last timestamp in the dataset."""
-        num_time_bins = (last_timestamp // self.time_subwindow) + 1  # Compute bins dynamically
-        return torchhd.random(num_time_bins, self.dims, "MAP", device=self.device).float()
+        # Ensure last_timestamp is a float32 (from your data type table)
+        if not isinstance(last_timestamp, (float, np.float32)):
+            last_timestamp = float(last_timestamp)
+
+        # Compute the number of time bins and cast it to an integer
+        num_time_bins = int((last_timestamp // self.time_subwindow) + 1)
+
+        # Debugging prints
+        print(
+            f"last_timestamp: {last_timestamp}, self.time_subwindow: {self.time_subwindow}, num_time_bins: {num_time_bins}")
+
+        # Ensure dimensions are correct
+        assert isinstance(num_time_bins, int), f"num_time_bins is not an int: {num_time_bins}"
+        assert isinstance(self.dims, int), f"self.dims is not an int: {self.dims}"
+
+        return torchhd.random(num_time_bins, self.dims, "MAP", device=self.device)
 
     def get_position_hv(self, x, y):
-
+        """Generates timestamp hypervectors dynamically based on the actual last timestamp in the dataset."""
         ##now: only generate (height//k + 1, width//k + 1) hypervectors instead of (height, width): On-Demand Generation
         # aka interpolates between corner hypervectors only when needed, rather than storing everything in advance for each pixel => revise
 
@@ -48,21 +60,22 @@ class GraspHDseedEncoder:
         #=> ensures that neighboring pixels have correlated hvs, preserving spatial smoothness
         #####experiment with k, not sure about their grid size, but they used k=2. their grid should be 200x250."""
         #1) Frame Division, paper page 9. Determine the block (i, j) where the pixel is located.
-        i = x // self.k
-        j = y // self.k
+        # 1) Compute block indices (ensure within bounds)
+        i = min(x // self.k, self.corner_hvs.shape[0] - 1)  # Clamp to valid range
+        j = min(y // self.k, self.corner_hvs.shape[1] - 1)  # Clamp to valid range
 
-        # Ensure kxk boundary safety
+        # 2) Get neighboring corner hypervectors
         i_next = min(i + 1, self.corner_hvs.shape[0] - 1)
         j_next = min(j + 1, self.corner_hvs.shape[1] - 1)
 
-        # 2) get the four corner hypervectors
+        # 3) get the four corner hypervectors
         P00 = self.corner_hvs[i, j]
         P01 = self.corner_hvs[i, j_next]
         P10 = self.corner_hvs[i_next, j]
         P11 = self.corner_hvs[i_next, j_next]
 
 
-        #3) Intermediate Hvs Interpolation: based on pixel's position within the block
+        #4) Intermediate Hvs Interpolation: based on pixel's position within the block
         # Interpolating for intermediate pixels: pixels in same ith window, get a HV by combining dims from 4 corners hvs
         ####### distance from corner ~ proportion of dim taken from each corner!
         '''#####example for k=2, Pixel corners: P00, P02 P20 P22
@@ -79,6 +92,7 @@ class GraspHDseedEncoder:
         # Compute interpolation factors
         alpha_x = (x % self.k) / (self.k - 1) if self.k > 1 else 0.5
         alpha_y = (y % self.k) / (self.k - 1) if self.k > 1 else 0.5
+
         interpolated_hv = (
             (1 - alpha_x) * (1 - alpha_y) * P00 +
             alpha_x * (1 - alpha_y) * P10 +
@@ -88,9 +102,13 @@ class GraspHDseedEncoder:
         return interpolated_hv
 
     def get_time_hv(self, time, time_hvs):
-        """Dynamically generates a timestamp hypervector for a given time value using alpha, interpolation."""
-        i = time // self.time_subwindow
-        i_next = min(i + 1, time_hvs.shape[0] - 1)
+        """Dynamically generates a timestamp hypervector for a given time value using interpolation."""
+        # Compute the indices and ensure they are integers
+        i = int(time // self.time_subwindow)  # Integer division for index
+        i_next = min(i + 1, time_hvs.shape[0] - 1)  # Ensure i_next is within bounds
+
+        # Debugging print
+        #print(f"time: {time}, i: {i}, i_next: {i_next}, time_hvs shape: {time_hvs.shape}")
 
         # Get two closest timestamp hypervectors
         T_i = time_hvs[i]
@@ -98,6 +116,8 @@ class GraspHDseedEncoder:
 
         # Compute interpolation factor alpha
         alpha_t = (time % self.time_subwindow) / self.time_subwindow if self.time_subwindow > 1 else 0.5
+
+        # Interpolate between the two hypervectors
         return (1 - alpha_t) * T_i + alpha_t * T_next
 
 
@@ -110,45 +130,3 @@ def interpolate_time_hv(T_start, T_end, alpha):
 
 
 
-def main():
-    """Load dataset, encode a few shuffled samples, and check similarity between class vectors."""
-    device = "cpu"
-    dataset_path = "/space/chair-nas/tosy/Gen3_Chifoumi_DAT/"
-    split_name = "val"
-    event_loader = GRASP_DAT_EventLoader(root_dir=dataset_path, split=split_name, delta_t=10000, shuffle=True)
-    #print(event_loader[0])  # Correct format! :)
-
-    encoded_vectors = []
-    class_labels = []
-
-    for sample_id, (filtered_events, class_id) in enumerate(event_loader):
-        # Extract the last timestamp from the filtered events.
-        last_timestamp = filtered_events[-1][0]  # First element of last row = last timestamp
-
-        # Instantiate the encoder
-        encoder = GraspHDseedEncoder(height=480, width=640, dims=8000, time_subwindow=10000, device=device)
-
-        # Generate timestamp hypervectors dynamically for this sample
-        time_hvs = encoder._generate_time_hvs(last_timestamp)
-
-        # Example usage: Encode a specific time (e.g., 12000 ms)
-        encoded_sample = encoder.get_time_hv(12000, time_hvs)
-
-        encoded_vectors.append(encoded_sample)
-        class_labels.append(class_id)
-        print(f"Sample {sample_id} - Encoded Vector Shape: {encoded_sample.shape}, Class ID: {class_id}")
-
-        if len(encoded_vectors) == 12:  # Limit to first 12 samples
-            break
-
-    # Convert the list of vectors to a tensor for similarity analysis
-    encoded_matrix = torch.stack(encoded_vectors)
-    similarity_matrix = torch.nn.functional.cosine_similarity(
-        encoded_matrix.unsqueeze(1), encoded_matrix.unsqueeze(0), dim=-1
-    )
-    print("\nCosine Similarity Between Encoded Vectors:")
-    print(similarity_matrix)
-
-
-if __name__ == "__main__":
-    main()
