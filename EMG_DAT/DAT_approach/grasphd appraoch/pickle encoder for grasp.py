@@ -14,7 +14,6 @@ import numpy as np
 import torchhd.functional as functional
 
 
-
 def load_pickle_dataset(dataset_path, split, max_samples):
     """
     Load event data and class labels from pickle files.

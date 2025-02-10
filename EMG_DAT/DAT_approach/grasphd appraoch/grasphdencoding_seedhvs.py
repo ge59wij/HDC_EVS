@@ -135,10 +135,6 @@ class GraspHDseedEncoder:
         #print(f"Interpolated HV shape: {interpolated_hv.shape}, Expected dims: {self.dims}")
         return interpolated_hv
 
-
-
-
-
     def get_position_hv_nooverlap(self, x, y):
         ##now: only generate (height//k + 1, width//k + 1) hypervectors instead of (height, width): On-Demand Generation
         """##Dynamically### generates a position hypervector for pixel (x, y) using interpolation.
