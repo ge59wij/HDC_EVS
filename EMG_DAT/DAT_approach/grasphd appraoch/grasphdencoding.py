@@ -23,6 +23,7 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         # Ensure the parent class is initialized with the correct device
         print(f"Initializing encoder")
         super().__init__(height, width, dims, time_subwindow=5000, k=k, device=device) ###############50000 μs  Fewer timestamp seed hypervectors
+        self.time_hvs = None
 
     def encode_temporal(self, events, class_id):
         """
