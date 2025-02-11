@@ -1,12 +1,12 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
 from DAT_loadergrasp import GRASP_DAT_EventLoader
-from grasphdencoding_seedhvs import GraspHDseedEncoder
 from grasphdencoding import GraspHDEventEncoder
 import torch
 from tqdm import tqdm
 import torchhd
-import pickle
+
+
 #todo: load from pickle files. batches like emg.
 def main():
     """Encode samples and visualize similarities with a heatmap."""

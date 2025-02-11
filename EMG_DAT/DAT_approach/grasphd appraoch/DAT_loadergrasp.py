@@ -41,7 +41,6 @@ class GRASP_DAT_EventLoader(Dataset):
         if shuffle: random.shuffle(self.file_pairs)
 
 
-
     def _get_file_pairs(self):
         pairs = []
         all_files = sorted(glob.glob(os.path.join(self.split_dir, '*_bbox.npy')))
