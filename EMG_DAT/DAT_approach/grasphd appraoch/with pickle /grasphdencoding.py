@@ -1,16 +1,19 @@
 import torch
 import torchhd
 from grasphdencoding_seedhvs import GraspHDseedEncoder
-#todo: normalization
+import numpy as np
+np.set_printoptions(suppress=True, precision=8)
+
 
 class GraspHDEventEncoder(GraspHDseedEncoder):
     def __init__(self, height, width, dims, k, time_subwindow, device):
         device = torch.device(device) if isinstance(device, str) else device
         print(f"Initializing encoder")
         super().__init__(height, width, dims, time_subwindow, k=k, device=device)
+        self.time_hv_cache = {}  # **CACHE for precomputed timestamp hypervectors!**
 
-    def encode_temporal(self, events, class_id):
-        """Binds spatial, polarity, and timestamp hypervectors for each event."""
+    def encode_grasphd(self, events, class_id):
+        """Performs spatial encoding first, then binds with time to obtain final spatiotemporal HV."""
         if not events:
             raise ValueError("No events provided for encoding.")
         print(f"Temporal Encoding: Processing {len(events)} events on {self.device}...")
@@ -18,50 +21,36 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         last_timestamp = events[-1][0]
         self._generate_time_hvs(last_timestamp)
 
-        E_temporal = None
+        H_spatiotemporal = None
+        time_dict = {}  # Stores per-timestamp aggregated spatial encoding
 
-        for event_index, event in enumerate(events):
+        # ----1. Compute Spatial Encoding & Group by Timestamp ----
+        for event in events:
             t, (x, y), polarity = event
-            P_xy = self.get_position_hv(x, y)
-            I_hv = self.H_I_plus if polarity == 1 else self.H_I_minus
-            T_ti = self.get_time_hv(t)
+            P_xy = self.get_position_hv(x, y)  # Position HV
+            I_hv = self.H_I_plus if polarity == 1 else self.H_I_minus  # Polarity HV (blue)
+            H_spatial = torchhd.bind(P_xy, I_hv)  # Spatial encoding per event
 
-            Ei = torchhd.bind(torchhd.bind(P_xy,T_ti), I_hv)  #multibundle?
-            Ei = torchhd.ensure_vsa_tensor(Ei, "MAP")
-
-            if E_temporal is None:
-                E_temporal = Ei  # First event initializes E_temporal
+            if t not in time_dict:
+                time_dict[t] = H_spatial
             else:
-                E_temporal = torchhd.bundle(E_temporal, Ei)  # Incremental bundling
+                time_dict[t] = torchhd.bundle(time_dict[t], H_spatial)  # Aggregate events at same timestamp/green, per timestamp)
 
+        # ---- 2.Bind Time HV with Spatial Encoding Per Timestamp ----
+        for t, H_spatial_t in time_dict.items():
+            # **CACHE TIME HVs TO AVOID DUPLICATE COMPUTATION**
+            if t not in self.time_hv_cache:
+                self.time_hv_cache[t] = self.get_time_hv(t)  # Save once
 
-            #Debuggingevery 100,000 events
-            if (event_index + 1) % 100000 == 0:
-                print(f"Intermediate Check after {event_index + 1} events: E_temp: {E_temporal}")
+            T_t = self.time_hv_cache[t]  # Fetch from cache
+            H_temporal_t = torchhd.bind(H_spatial_t, T_t)  # # Temporal encoding (purple, per timestamp)
 
-        print(f"\nTemporal Encoding Complete | Class ID: {class_id} | Output Shape: {E_temporal.shape} | Device: {E_temporal.device}")
-        print("Sample HV: ", E_temporal)
-        return E_temporal
+            # ---- 3. Aggregate Over Time Windows ----
+            if H_spatiotemporal is None:
+                H_spatiotemporal = H_temporal_t
+            else:
+                H_spatiotemporal = torchhd.bundle(H_spatiotemporal, H_temporal_t)
 
-
-
-     #Spatial encoding??? this, summed with E temp, last step, resulting vector is HV sample.
-def encode_spatial(self, events):
-
-        ###Spatial Encoding:
-        #For each triggered event (x, y, polarity), compute H_spatial as:
-        #H_spatial = sum_x sum_y (P(x,y) bind I)
-        #- (binding) dissimilar
-        #- (bundle/Summing) preserves similarities for the accumulated event representations.
-
-    print(f'spatial encoding processing  {len(events)} events...') #debug
-    spatial_encoded_event = []
-    for event in events:
-    t, (x, y), polarity = event
-    P_xy = self.get_position_hv(x, y)  # Get position HV
-    I_hv = self.H_I_plus if polarity == 1 else self.H_I_minus  # Get polarity HV
-    spatial_encoded_event = torchhd.bind(P_xy, I_hv)
-    spatial_encoded_event.append(spatial_encoded_event)
-    H_spatial = torchhd.multibundle(torch.stack(spatial_encoded_event))
-    print(f'Spatial Encoding Complete | Output Shape: {H_spatial.shape}')
-    return H_spatial  # Final spatial encoding representing all events, one sample.
+        print(f"\nSpatiotemporal Encoding Complete | Class ID: {class_id} | Output Shape: {H_spatiotemporal.shape} | Device: {H_spatiotemporal.device}")
+        print("spatio HV: ", H_spatiotemporal[:10])
+        return H_spatiotemporal  # Final HV representing the entire sample (purple)

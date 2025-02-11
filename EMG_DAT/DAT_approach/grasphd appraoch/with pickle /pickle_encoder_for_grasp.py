@@ -7,25 +7,28 @@ from grasphdencoding import GraspHDEventEncoder
 import torchhd
 import random
 import matplotlib.pyplot as plt
+torch.set_printoptions(sci_mode=False)
+import numpy as np
+np.set_printoptions(suppress=True, precision=8)
 
 
 def main():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu", #"cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
     split_name = "val"
-    max_samples = 20
-    DIMS = 4000
+    max_samples = 110
+    DIMS = 5000
     K= 3
-    Timewindow = 50000
+    Timewindow = 30000
 
     print(f"K:{K}, D:{DIMS}, #samples:{max_samples}, Timesubwindow: {Timewindow}")
 
     dataset = load_pickle_dataset(dataset_path, split=split_name, max_samples=max_samples)
     random.shuffle(dataset)
 
-    encoder = GraspHDEventEncoder(height=480, width=640, dims=DIMS, time_subwindow= Timewindow , k=K, device=device)
+    encoder = GraspHDEventEncoder(height=480, width=640, dims=DIMS, time_subwindow= Timewindow , k=K, device="cpu")
 
     encoded_vectors = []
     class_labels = []
@@ -40,8 +43,8 @@ def main():
             )
             for event in events
         ]
-        encoded_sample = encoder.encode_temporal(formatted_events, class_id)
-        encoded_sample = encoded_sample.to(device).squeeze()
+        encoded_sample = encoder.encode_grasphd(formatted_events, class_id)
+        encoded_sample = encoded_sample.squeeze() # .to(device).squeeze()
         encoded_vectors.append(encoded_sample)
         class_labels.append(class_id)
     print("\nEncoding Complete. Generating similarity heatmap...\n")

@@ -1,6 +1,8 @@
 import torch
 import torchhd
 import numpy as np
+import numpy as np
+np.set_printoptions(suppress=True, precision=8)
 
 class GraspHDseedEncoder:
     def __init__(self, height, width, dims, time_subwindow, k, device):
