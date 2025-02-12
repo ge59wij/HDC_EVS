@@ -4,9 +4,8 @@ import numpy as np
 
 np.set_printoptions(suppress=True, precision=8)
 
-
 class GraspHDseedEncoder:
-    def __init__(self, height, width, dims, time_subwindow, k, device):
+    def __init__(self, height, width, dims, time_subwindow, k, device, max_time):
         print("Initializing Seed Encoder...")
         self.height = height
         self.width = width
@@ -25,45 +24,26 @@ class GraspHDseedEncoder:
         num_corners = ((self.width // self.k) + 1) * ((self.height // self.k) + 1)
         self.corner_hvs = torchhd.embeddings.Random(num_corners, dims, "MAP", device=self.device)
 
-        # **Time Hypervectors (Lazy Initialization)**
-        self.time_hvs = None
-        self.max_time = None  # To be determined dynamically
+        # **Time Hypervectors - Now Fully Precomputed!**
+        self.max_time = max_time
+        self.num_time_bins = int(self.max_time // self.time_subwindow) + 1
+        print(f"[INFO] Precomputing {self.num_time_bins} time hypervectors...")
+        self.time_hvs = torchhd.random(self.num_time_bins, self.dims, "MAP", device=self.device)
 
         # **Precompute position hypervectors (Concatenation-based)**
         self.precomputed_positions = self._precompute_position_hvs()
 
-    def _update_time_hvs(self, last_timestamp):
-        """Ensure enough time hypervectors exist for the dataset."""
-        num_time_bins = int((last_timestamp // self.time_subwindow) + 1)
-
-        if self.time_hvs is None:
-            # Initialize time hypervectors properly as a tensor, not an embedding object
-            self.time_hvs = torchhd.random(num_time_bins, self.dims, "MAP", device=self.device)
-            print(f"[DEBUG] Initialized Time Hypervectors up to {last_timestamp}µs (Bins: {num_time_bins})")
-
-        elif num_time_bins > self.time_hvs.shape[0]:  # Expand if needed
-            missing_hvs = torchhd.random(num_time_bins - self.time_hvs.shape[0], self.dims, "MAP", device=self.device)
-            self.time_hvs = torch.cat([self.time_hvs, missing_hvs], dim=0)  # Concatenate new hypervectors
-            print(f"[DEBUG] Expanded Time Hypervectors up to {last_timestamp}µs (Bins: {num_time_bins})")
-
     def get_time_hv(self, time):
         """Retrieve a time hypervector from embeddings"""
         i = int(time // self.time_subwindow)
-
-        # Ensure `i` is within the range of generated hypervectors
-        max_time_bin = (self.max_time // self.time_subwindow) if hasattr(self, 'max_time') else None
-        if max_time_bin is not None and i >= max_time_bin:
-            print(f"[WARNING] Clamping time index {i} to max available {max_time_bin - 1}")
-            i = max_time_bin - 1  # Avoid out-of-bounds error
-
-        i_next = min(i + 1, max_time_bin - 1) if max_time_bin is not None else i + 1
+        i_next = min(i + 1, self.num_time_bins - 1)  # Ensure index is within valid range
 
         # Debugging prints
-        print(f"[DEBUG] Time Query: time={time}, i={i}, i_next={i_next}, max_time_bin={max_time_bin}")
+        #print(f"[DEBUG] Time Query: time={time}, i={i}, i_next={i_next}, max_time_bin={self.num_time_bins}")
 
         # Retrieve time hypervectors
-        T_i = self.time_hvs(torch.tensor(i, dtype=torch.long, device=self.device))
-        T_next = self.time_hvs(torch.tensor(i_next, dtype=torch.long, device=self.device))
+        T_i = self.time_hvs[i]
+        T_next = self.time_hvs[i_next]
 
         alpha_t = (time % self.time_subwindow) / self.time_subwindow if self.time_subwindow > 1 else 0.5
 

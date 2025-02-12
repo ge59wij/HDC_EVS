@@ -7,74 +7,91 @@ from tqdm import tqdm
 import seaborn as sns
 import matplotlib.pyplot as plt
 from grasphdencoding import GraspHDEventEncoder
-from torchhd.models import Centroid
+from torch.utils.data import DataLoader, TensorDataset
+import torchhd.functional as functional
 import random
 
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
 
 def main():
-    device = "cpu" #if torch.cuda.is_available() else "cpu"
+    device = "cuda"  # if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
-    split_name = "train"
-    max_samples = 11
-    DIMS = 3000
+    train_split, test_split = "train", "test"
+    max_samples = 14
+    DIMS = 300
     K = 3
-    Timewindow = 30000
+    Timewindow = 500000  # Time bin size
+    num_classes = 3
+    batches = 1
 
-    dataset = load_pickle_dataset(dataset_path, split=split_name, max_samples=max_samples)
-    encoder = GraspHDEventEncoder(height=480, width=640, dims=DIMS, time_subwindow=Timewindow, k=K, device=device)
+    # Load datasets (NOW OUTPUTS TENSORS)
+    train_loader, train_max_time = load_pickle_dataset(dataset_path, split=train_split, max_samples=max_samples, batch_size= batches, device=device)
+    test_loader, test_max_time  = load_pickle_dataset(dataset_path, split=test_split, max_samples=max_samples,batch_size= batches, device=device)
 
-    encoded_vectors, class_labels = [], []
-    for sample_id, (events, class_id) in tqdm(enumerate(dataset), total=len(dataset), desc="Encoding Samples"):
-        encoded_sample = encoder.encode_grasphd(events, class_id)
-        encoded_vectors.append(encoded_sample)
-        class_labels.append(class_id)
+    # Ensure max_time covers both train and test
+    max_time = max(train_max_time, test_max_time)
+    print(f"[INFO] Adjusted Global Maximum Timestamp: {max_time} µs")
 
-    encoded_matrix = torch.stack(encoded_vectors)
+    encoder = GraspHDEventEncoder(480, 640, DIMS, Timewindow, K, device, max_time)
+    classifier = torchhd.models.Centroid(DIMS, num_classes, device=device)
 
-    # **Train Centroid Classifier**
-    model = Centroid(DIMS, len(set(class_labels)))
     with torch.no_grad():
-        for vec, label in zip(encoded_matrix, class_labels):
-            model.add(vec, label)
-    model.normalize()
+        for batch_events, batch_labels in tqdm(train_loader, desc="Encoding Train Batches"):
+            encoded_batch = encoder.encode_grasphd(batch_events, batch_labels)
+            classifier.add(encoded_batch, batch_labels)
 
-    similarity_matrix = torchhd.cosine_similarity(encoded_matrix, model.weight)
+    classifier.normalize()
+    evaluate_model(classifier, encoder, test_loader, device)
 
-    plot_with_parameters(similarity_matrix, class_labels, K, Timewindow, DIMS, max_samples)
 
-def plot_with_parameters(similarity_matrix, class_labels, k, Timewindow, dims, max_samples):
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(
-        similarity_matrix.cpu().numpy(),
-        annot=True,
-        cmap="coolwarm",
-        fmt=".2f",
-        xticklabels=class_labels,
-        yticklabels=class_labels,
-        cbar=True,
-    )
-    plt.title(f"Cosine Similarity GRASPHD Heatmap (k={k}, dims={dims}, timewindow= {Timewindow}, samples={max_samples})")
-    plt.xlabel("Sample Index (Class ID)")
-    plt.ylabel("Sample Index (Class ID)")
-    plt.show()
-def load_pickle_dataset(dataset_path, split, max_samples):
-    """
-    Returns List[Tuple]: A list of tuples (events, class_id), where events are the event tuples (t, (x, y), p).
-    """
+def load_pickle_dataset(dataset_path, split, max_samples, batch_size, device):
     split_path = os.path.join(dataset_path, split)
     files = [os.path.join(split_path, f) for f in os.listdir(split_path) if f.endswith('.pkl')]
     random.shuffle(files)
-    dataset = []
+
+    event_list, label_list = [], []
+    max_time = 0
+
     for file in files[:max_samples]:
         with open(file, 'rb') as f:
             events, class_id = pickle.load(f)
-        dataset.append((events, class_id))
-    print(f"Loaded {len(dataset)} samples from {split} split.")
-    return dataset
+
+        if isinstance(events, np.ndarray) and events.dtype.names is not None:
+            events = np.column_stack((events["t"], events["x"], events["y"], events["p"]))
+
+        events_tensor = torch.tensor(events, dtype=torch.float32, device=device)
+        label_tensor = torch.tensor(class_id, dtype=torch.long, device=device)
+
+        sample_max_time = torch.max(events_tensor[:, 0]) if events_tensor.numel() > 0 else 0
+        max_time = max(max_time, sample_max_time.item())
+
+        event_list.append(events_tensor)
+        label_list.append(label_tensor)
+
+    dataset = TensorDataset(torch.stack(event_list), torch.stack(label_list))
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    print(f"Loaded {len(event_list)} samples from {split} split. Max timestamp: {max_time} µs")
+    return data_loader, max_time
+
+
+def evaluate_model(classifier, encoder, test_loader, device):
+    print("\n Running accuracy test on test batches...\n")
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for batch_events, batch_labels in test_loader:
+            encoded_test_samples = encoder.encode_grasphd(batch_events, batch_labels)
+            similarities = classifier(encoded_test_samples)
+            predicted_labels = torch.argmax(similarities, dim=1)
+            correct += (predicted_labels == batch_labels).int().sum().item()
+            total += batch_labels.numel()
+
+    accuracy = correct / total * 100 if total > 0 else 0
+    print(f"\n[RESULT] Test Accuracy: {accuracy:.2f}% ({correct}/{total} correct)\n")
 
 
 if __name__ == "__main__":
