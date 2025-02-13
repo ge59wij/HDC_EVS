@@ -20,8 +20,8 @@ def main():
     device = "cpu"
     dataset_path = "/space/chair-nas/tosy/pt_chifoumi"
     train_split, test_split = "train", "test"
-    max_samples_train = 100
-    max_samples_test = 22
+    max_samples_train = 10
+    max_samples_test = 23
     DIMS = 4000
     K = 4
     Timewindow = 1000000
@@ -46,7 +46,9 @@ def main():
     encoding_methods = {
         "encode_grasphd": encoder.encode_grasphd,
         "nsumming": encoder.encode_grasp_n_summing, }
+
     encode_method = encoding_methods.get(encoding_mode)
+
     if encode_method is None: raise ValueError(
         f"Invalid encoding mode '{encoding_mode}'. Choose from: {list(encoding_methods.keys())}")
 
@@ -63,26 +65,34 @@ def load_tensor_dataset(dataset_path, split, max_samples, batch_size, device):
     split_path = os.path.join(dataset_path, split)
     files = [os.path.join(split_path, f) for f in os.listdir(split_path) if f.endswith('.pt')]
 
-    event_list, label_list = [], []
+    event_list, label_list, mask_list = [], [], []
     max_time = 3600000
 
     for file in files[:max_samples]:
         data = torch.load(file)
         events_tensor, label_tensor = data["events"], data["label"]
+
         if label_tensor.dim() == 0:
             label_tensor = label_tensor.unsqueeze(0)
+
         events_tensor = events_tensor.to(device)
         label_tensor = label_tensor.to(device)
+
         event_list.append(events_tensor)
         label_list.append(label_tensor)
+        mask_list.append(torch.ones(events_tensor.shape[0], dtype=torch.bool, device=device))  # Create mask
 
-    dataset = TensorDataset(torch.stack(event_list), torch.stack(label_list))
+    # Pad event tensors and masks
+    padded_events = pad_sequence(event_list, batch_first=True, padding_value=0)
+    padded_mask = pad_sequence(mask_list, batch_first=True, padding_value=False)  # False = ignored
+
+    dataset = TensorDataset(padded_events, padded_mask, torch.stack(label_list))
     return DataLoader(dataset, batch_size=batch_size, shuffle=True), max_time
 
 
 def train_model(train_loader, encode_method, training_mode, class_vectors, use_iterative_retrain=False):
     """
-    Train using either centroid-based or adaptive update(grasphd paper).
+    Train using either centroid-based or adaptive update (grasphd paper).
     Adaptive learning updates class hypervectors based on similarity.
     Iterative retraining (if enabled) refines them further.
     """
@@ -94,25 +104,26 @@ def train_model(train_loader, encode_method, training_mode, class_vectors, use_i
         classifier = torchhd.models.Centroid(class_vectors.shape[1], class_vectors.shape[0],
                                              device=class_vectors.device)
         with torch.no_grad():
-            for batch_events, batch_labels in tqdm(train_loader, desc="Training (Centroid)"):
-                encoded_batch = encode_method(batch_events, batch_labels)
+            for batch_events, batch_mask, batch_labels in tqdm(train_loader, desc="Training (Centroid)"):
+                encoded_batch = encode_method(batch_events, batch_mask, batch_labels)  # ✅ Pass `batch_mask`
                 classifier.add(encoded_batch, batch_labels)
         classifier.normalize()
 
     elif training_mode == "adaptive":
         # **Adaptive Training (Initial Learning)**
-        for batch_events, batch_labels in tqdm(train_loader, desc="Training Adaptive"):
-            batch_labels = batch_labels.squeeze()  # Ensure it's a 1D tensor (not shape [batch_size, 1])
-            encoded_batch = encode_method(batch_events, batch_labels)
+        for batch_events, batch_mask, batch_labels in tqdm(train_loader, desc="Training Adaptive"):
+            batch_labels = batch_labels.view(-1)  # Ensure batch_labels is at least 1D
+            encoded_batch = encode_method(batch_events, batch_mask, batch_labels)  #  Pass `batch_mask`
             for i in range(len(encoded_batch)):
                 w_correct = torchhd.cosine_similarity(class_vectors[batch_labels[i]], encoded_batch[i])
                 class_vectors[batch_labels[i]] += l * w_correct * encoded_batch[i]
 
         # **Iterative Retraining (Optional)**
         if use_iterative_retrain:
-            for epoch in range(4):  ####epoch num
-                for batch_events, batch_labels in tqdm(train_loader, desc=f"Iterative Retraining (Epoch {epoch + 1})"):
-                    encoded_batch = encode_method(batch_events, batch_labels)
+            for epoch in range(4):  # Number of epochs
+                for batch_events, batch_mask, batch_labels in tqdm(train_loader,
+                                                                   desc=f"Iterative Retraining (Epoch {epoch + 1})"):
+                    encoded_batch = encode_method(batch_events, batch_mask, batch_labels)  # ✅ Pass `batch_mask`
                     for i in range(len(encoded_batch)):
                         prediction = torch.argmax(torchhd.cosine_similarity(class_vectors, encoded_batch[i]))
 
@@ -124,9 +135,9 @@ def train_model(train_loader, encode_method, training_mode, class_vectors, use_i
                             class_vectors[prediction] -= l * (1 - w_wrong) * encoded_batch[i]
 
         class_vectors = torchhd.normalize(class_vectors)
+
     print(f"\n[INFO] Final Class Hypervectors (Norm Check): {torch.norm(class_vectors, dim=1)}")
     return class_vectors
-
 
 
 def evaluate_model(class_vectors, test_loader, encode_method):
@@ -137,8 +148,8 @@ def evaluate_model(class_vectors, test_loader, encode_method):
     correct = 0
     total = 0
     with torch.no_grad():
-        for batch_events, batch_labels in test_loader:
-            encoded_test_samples = encode_method(batch_events, batch_labels)
+        for batch_events, batch_mask, batch_labels in test_loader:
+            encoded_test_samples = encode_method(batch_events, batch_mask, batch_labels)  # Pass the mask
             similarities = torchhd.cosine_similarity(class_vectors, encoded_test_samples)
             predicted_labels = torch.argmax(similarities, dim=1)
             correct += (predicted_labels == batch_labels).int().sum().item()
