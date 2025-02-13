@@ -15,96 +15,109 @@ from torch.nn.utils.rnn import pad_sequence
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
 
+
 def main():
-    device = "cpu"  # if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
+    device = "cpu"
     dataset_path = "/space/chair-nas/tosy/pt_chifoumi"
     train_split, test_split = "train", "test"
     max_samples_train = 100
     max_samples_test = 22
     DIMS = 4000
     K = 4
-    Timewindow = 1000000  # Time bin size #ideally?
+    Timewindow = 1000000
     num_classes = 3
     batches = 1
-    Encoding_Class = GraspHDEventEncoder
-    encoding_mode = "encode_grasphd"
-    print(f"Encoding mode: {encoding_mode}")
 
+    Encoding_Class = GraspHDEventEncoder
+    encoding_mode = "encode_grasphd"  # Options: "encode_grasphd", "nsumming"
+    training_mode = "centroid"  # Options: "centroid", "iterative"
+
+    print(f"Using Encoding Mode: {encoding_mode} | Training Mode: {training_mode} | Device: {device}")
 
     # Load datasets (NOW OUTPUTS TENSORS)
-    train_loader, train_max_time = load_tensor_dataset(dataset_path, split=train_split, max_samples=max_samples_train, batch_size= batches, device=device)
-    test_loader, test_max_time = load_tensor_dataset(dataset_path, split=test_split, max_samples=max_samples_test,batch_size= batches, device=device)
+    train_loader, train_max_time = load_tensor_dataset(dataset_path, train_split, max_samples_train, batches, device)
+    test_loader, test_max_time = load_tensor_dataset(dataset_path, test_split, max_samples_test, batches, device)
 
     max_time = max(train_max_time, test_max_time)
-    print(f"DEBUG: Passing Timewindow = {Timewindow}")
     print(f"[INFO] Adjusted Global Maximum Timestamp: {max_time} µs")
 
     encoder = Encoding_Class(480, 640, DIMS, Timewindow, K, device, max_time)
-    classifier = torchhd.models.Centroid(DIMS, num_classes, device=device)
     encoding_methods = {
         "encode_grasphd": encoder.encode_grasphd,
-        "nsumming": encoder.encode_grasp_n_summing,
-    }
+        "nsumming": encoder.encode_grasp_n_summing, }
     encode_method = encoding_methods.get(encoding_mode)
-    if encode_method is None:
-        raise ValueError(f"Invalid encoding mode '{encoding_mode}'. Choose from: {list(encoding_methods.keys())}")
+    if encode_method is None: raise ValueError(
+        f"Invalid encoding mode '{encoding_mode}'. Choose from: {list(encoding_methods.keys())}")
 
-    with torch.no_grad():
-        for batch_events, batch_labels in tqdm(train_loader, desc=f"Encoding Train Batches ({encoding_mode})"):
-            encoded_batch = encode_method(batch_events, batch_labels)  # Dynamically call selected method
-            classifier.add(encoded_batch, batch_labels)
-    classifier.normalize()
-    evaluate_model(classifier, encoder, test_loader, device)
+    # Initialize class vectors for iterative update
+    class_vectors = torchhd.random(num_classes, DIMS, "MAP", device=device)
+    train_model(train_loader, encode_method, training_mode, class_vectors)
+    evaluate_model(class_vectors, test_loader, encode_method)
+
 
 def load_tensor_dataset(dataset_path, split, max_samples, batch_size, device):
     """
     Loads event tensors and labels directly from .pt files.
-    Ensures correct padding if batch_size > 1.
     """
     split_path = os.path.join(dataset_path, split)
     files = [os.path.join(split_path, f) for f in os.listdir(split_path) if f.endswith('.pt')]
 
     event_list, label_list = [], []
-    max_time = 3600000 #1960000
+    max_time = 3600000
 
     for file in files[:max_samples]:
-        data = torch.load(file)  # Load from .pt
+        data = torch.load(file)
         events_tensor, label_tensor = data["events"], data["label"]
-
-        # Ensure label is correctly shaped
         if label_tensor.dim() == 0:
-            label_tensor = label_tensor.unsqueeze(0)  # Convert scalar to tensor
-
-        # Move to device
+            label_tensor = label_tensor.unsqueeze(0)
         events_tensor = events_tensor.to(device)
         label_tensor = label_tensor.to(device)
-
-        # Update max_time dynamically
-        #max_time = max(max_time, events_tensor[:, 0].max().item() if events_tensor.numel() > 0 else 0)
-
         event_list.append(events_tensor)
         label_list.append(label_tensor)
 
-    # **Only pad if batch_size > 1**
-    if batch_size > 1:
-        padded_events = pad_sequence(event_list, batch_first=True, padding_value=0)
-        dataset = TensorDataset(padded_events, torch.cat(label_list))
-    else:
-        dataset = list(zip(event_list, label_list))  # List of (event_tensor, label_tensor) tuples
+    dataset = TensorDataset(torch.stack(event_list), torch.stack(label_list))
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True), max_time
 
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    print(f"Loaded {len(event_list)} samples from {split}. Max timestamp: {max_time} µs.")
-    return data_loader, max_time
-def evaluate_model(classifier, encoder, test_loader, device):
-    print("\n Running accuracy test on test batches...\n")
+def train_model(train_loader, encode_method, training_mode, class_vectors):
+    """
+    Train using either centroid-based or iterative update(grasphd paper).
+    """
+    print(f"\n[TRAINING] Using {training_mode} method...\n")
+
+    if training_mode == "centroid":
+        classifier = torchhd.models.Centroid(class_vectors.shape[1], class_vectors.shape[0],
+                                             device=class_vectors.device)
+        with torch.no_grad():
+            for batch_events, batch_labels in tqdm(train_loader, desc="Training (Centroid)"):
+                encoded_batch = encode_method(batch_events, batch_labels)
+                classifier.add(encoded_batch, batch_labels)
+        classifier.normalize()
+
+    elif training_mode == "iterative":
+        num_epochs = 5  # Adjustable
+        for epoch in range(num_epochs):
+            for batch_events, batch_labels in tqdm(train_loader, desc=f"Training Iterative (Epoch {epoch + 1})"):
+                encoded_batch = encode_method(batch_events, batch_labels)
+                for i in range(len(encoded_batch)):
+                    prediction = torch.argmax(torchhd.cosine_similarity(class_vectors, encoded_batch[i]))
+                    if prediction != batch_labels[i]:
+                        class_vectors[batch_labels[i]] += encoded_batch[i]
+                        class_vectors[prediction] -= encoded_batch[i]
+        class_vectors = torchhd.normalize(class_vectors)
+
+
+def evaluate_model(class_vectors, test_loader, encode_method):
+    """
+    cosine similarity.
+    """
+    print("\n[TESTING] Evaluating Model...\n")
     correct = 0
     total = 0
     with torch.no_grad():
         for batch_events, batch_labels in test_loader:
-            encoded_test_samples = encoder.encode_grasphd(batch_events, batch_labels)
-            similarities = classifier(encoded_test_samples)
+            encoded_test_samples = encode_method(batch_events, batch_labels)
+            similarities = torchhd.cosine_similarity(class_vectors, encoded_test_samples)
             predicted_labels = torch.argmax(similarities, dim=1)
             correct += (predicted_labels == batch_labels).int().sum().item()
             total += batch_labels.numel()
