@@ -30,7 +30,8 @@ def main():
 
     Encoding_Class = GraspHDEventEncoder
     encoding_mode = "encode_grasphd"  # Options: "encode_grasphd", "nsumming"
-    training_mode = "centroid"  # Options: "centroid", "iterative"
+    training_mode = "adaptive"  # "centroid" or "adaptive"
+    use_iterative_retrain = True
 
     print(f"Using Encoding Mode: {encoding_mode} | Training Mode: {training_mode} | Device: {device}")
 
@@ -49,9 +50,9 @@ def main():
     if encode_method is None: raise ValueError(
         f"Invalid encoding mode '{encoding_mode}'. Choose from: {list(encoding_methods.keys())}")
 
-    # Initialize class vectors for iterative update
+    # Initialize class vectors for adaptive update
     class_vectors = torchhd.random(num_classes, DIMS, "MAP", device=device)
-    train_model(train_loader, encode_method, training_mode, class_vectors)
+    class_vectors = train_model(train_loader, encode_method, training_mode, class_vectors, use_iterative_retrain)
     evaluate_model(class_vectors, test_loader, encode_method)
 
 
@@ -79,11 +80,15 @@ def load_tensor_dataset(dataset_path, split, max_samples, batch_size, device):
     return DataLoader(dataset, batch_size=batch_size, shuffle=True), max_time
 
 
-def train_model(train_loader, encode_method, training_mode, class_vectors):
+def train_model(train_loader, encode_method, training_mode, class_vectors, use_iterative_retrain=False):
     """
-    Train using either centroid-based or iterative update(grasphd paper).
+    Train using either centroid-based or adaptive update(grasphd paper).
+    Adaptive learning updates class hypervectors based on similarity.
+    Iterative retraining (if enabled) refines them further.
     """
-    print(f"\n[TRAINING] Using {training_mode} method...\n")
+    print(f"\n[TRAINING] Using {training_mode} method | Iterative Retraining: {use_iterative_retrain}\n")
+
+    l = 0.1  # Learning rate
 
     if training_mode == "centroid":
         classifier = torchhd.models.Centroid(class_vectors.shape[1], class_vectors.shape[0],
@@ -94,17 +99,34 @@ def train_model(train_loader, encode_method, training_mode, class_vectors):
                 classifier.add(encoded_batch, batch_labels)
         classifier.normalize()
 
-    elif training_mode == "iterative":
-        num_epochs = 5  # Adjustable
-        for epoch in range(num_epochs):
-            for batch_events, batch_labels in tqdm(train_loader, desc=f"Training Iterative (Epoch {epoch + 1})"):
-                encoded_batch = encode_method(batch_events, batch_labels)
-                for i in range(len(encoded_batch)):
-                    prediction = torch.argmax(torchhd.cosine_similarity(class_vectors, encoded_batch[i]))
-                    if prediction != batch_labels[i]:
-                        class_vectors[batch_labels[i]] += encoded_batch[i]
-                        class_vectors[prediction] -= encoded_batch[i]
+    elif training_mode == "adaptive":
+        # **Adaptive Training (Initial Learning)**
+        for batch_events, batch_labels in tqdm(train_loader, desc="Training Adaptive"):
+            batch_labels = batch_labels.squeeze()  # Ensure it's a 1D tensor (not shape [batch_size, 1])
+            encoded_batch = encode_method(batch_events, batch_labels)
+            for i in range(len(encoded_batch)):
+                w_correct = torchhd.cosine_similarity(class_vectors[batch_labels[i]], encoded_batch[i])
+                class_vectors[batch_labels[i]] += l * w_correct * encoded_batch[i]
+
+        # **Iterative Retraining (Optional)**
+        if use_iterative_retrain:
+            for epoch in range(4):  ####epoch num
+                for batch_events, batch_labels in tqdm(train_loader, desc=f"Iterative Retraining (Epoch {epoch + 1})"):
+                    encoded_batch = encode_method(batch_events, batch_labels)
+                    for i in range(len(encoded_batch)):
+                        prediction = torch.argmax(torchhd.cosine_similarity(class_vectors, encoded_batch[i]))
+
+                        if prediction != batch_labels[i]:  # Only update if misclassified
+                            w_correct = torchhd.cosine_similarity(class_vectors[batch_labels[i]], encoded_batch[i])
+                            w_wrong = torchhd.cosine_similarity(class_vectors[prediction], encoded_batch[i])
+
+                            class_vectors[batch_labels[i]] += l * (1 - w_correct) * encoded_batch[i]
+                            class_vectors[prediction] -= l * (1 - w_wrong) * encoded_batch[i]
+
         class_vectors = torchhd.normalize(class_vectors)
+    print(f"\n[INFO] Final Class Hypervectors (Norm Check): {torch.norm(class_vectors, dim=1)}")
+    return class_vectors
+
 
 
 def evaluate_model(class_vectors, test_loader, encode_method):
