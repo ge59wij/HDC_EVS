@@ -24,20 +24,23 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
             time_dict = {}
 
             # Step 1: Spatial Encoding (Group Events by Timestamp)
-            for i in range(events.shape[0]):
-                if not valid_mask[i]:
-                    continue  # Ignore padded values
+            valid_events = events[valid_mask]  # Get only valid events (No loop!)
+            t, x, y, polarity = valid_events[:, 0], valid_events[:, 1], valid_events[:, 2], valid_events[:, 3]
 
-                t, x, y, polarity = events[i]
-                P_xy = self.get_position_hv(int(x.item()), int(y.item()))
-                I_p = self.H_I_plus if polarity.item() == 1 else self.H_I_minus
-                H_spatial = torchhd.bind(P_xy, I_p)
+            P_xy = self.get_position_hv(x.long(), y.long())  # Vectorized position retrieval
+            I_p = self.H_I_plus.unsqueeze(0).repeat(polarity.shape[0], 1) * (polarity > 0).unsqueeze(1) + \
+                  self.H_I_minus.unsqueeze(0).repeat(polarity.shape[0], 1) * (polarity <= 0).unsqueeze(1)
+            H_spatial = torchhd.bind(P_xy, I_p)  # Bind in a single step
+            print(f"polarity shape: {polarity.shape}")
+            print(f"H_I_plus shape: {self.H_I_plus.shape}")
+            print(f"H_I_minus shape: {self.H_I_minus.shape}")
+            print(f"I_p shape: {I_p.shape}")
 
-                t_key = t.item()
-                if t_key not in time_dict:
-                    time_dict[t_key] = H_spatial
-                else:
-                    time_dict[t_key] = torchhd.multiset(torch.stack([time_dict[t_key], H_spatial]))
+            t_key = t.item()
+            if t_key not in time_dict:
+                time_dict[t_key] = H_spatial
+            else:
+                time_dict[t_key] = torchhd.multiset(torch.stack([time_dict[t_key], H_spatial]))
 
             # Step 2: Temporal Binding & Aggregation
             for t, H_spatial_t in time_dict.items():

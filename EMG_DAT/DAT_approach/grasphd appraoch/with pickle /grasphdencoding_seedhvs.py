@@ -30,7 +30,7 @@ class GraspHDseedEncoder:
         print(f"number of Corners: {num_corners}, Number Interpolated HVS: {num_interpolation}. [ number rows {num_rows}, number cols {num_cols}]")
         self.corner_hvs = torchhd.embeddings.Random(num_corners, dims, "MAP", device=self.device)
         print(f"Generated {num_corners} Corner HVS")
-        self.precomputed_positions = self._precompute_position_hvs(num_cols, num_rows)        # **Precompute position hypervectors (Concatenation-based)**
+        self.precomputed_positions = self._precompute_position_hvs(num_cols, num_rows)        # **Precompute position hypervectors (Concatenation-based)** #307,200 iterations!!!!!!!!!!
         print(f"Generated {num_interpolation} Position HVS")
 
         # **Time Hypervectors**
@@ -78,40 +78,31 @@ class GraspHDseedEncoder:
         return interpolated_hvs
 
     def _precompute_position_hvs(self, num_cols, num_rows):
-        """Precompute position interpolation using concatenation instead of weighted sum."""
-        precomputed = {}
-        for x in range(self.width):
-            for y in range(self.height):
-                i = min(x // self.k, num_rows - 1)
-                j = min(y // self.k, num_cols - 1)
-                i_next = min(i + 1, num_rows - 1)
-                j_next = min(j + 1, num_cols - 1)
+        """Vectorized approach to precompute position hypervectors."""
+        x_indices = torch.arange(self.width, device=self.device).unsqueeze(1)  # (640, 1)
+        y_indices = torch.arange(self.height, device=self.device).unsqueeze(0)  # (1, 480)
 
-                idx_00 = i * num_cols + j
-                idx_01 = i * num_cols + j_next
-                idx_10 = i_next * num_cols + j
-                idx_11 = i_next * num_cols + j_next
+        i = torch.clamp(x_indices // self.k, max=num_rows - 1)
+        j = torch.clamp(y_indices // self.k, max=num_cols - 1)
+        i_next = torch.clamp(i + 1, max=num_rows - 1)
+        j_next = torch.clamp(j + 1, max=num_cols - 1)
 
-                P00 = self.corner_hvs(torch.tensor(idx_00, dtype=torch.long, device=self.device))
-                P01 = self.corner_hvs(torch.tensor(idx_01, dtype=torch.long, device=self.device))
-                P10 = self.corner_hvs(torch.tensor(idx_10, dtype=torch.long, device=self.device))
-                P11 = self.corner_hvs(torch.tensor(idx_11, dtype=torch.long, device=self.device))
+        idx_00 = (i * num_cols + j).flatten()
+        idx_01 = (i * num_cols + j_next).flatten()
+        idx_10 = (i_next * num_cols + j).flatten()
+        idx_11 = (i_next * num_cols + j_next).flatten()
 
-                # Compute the proportions for each quarter
-                if x % self.k == 0 and y % self.k == 0:
-                    precomputed[(x, y)] = P00
-                elif x % self.k == 0:
-                    precomputed[(x, y)] = torch.cat([P00[:self.dims // 2], P01[self.dims // 2:]])
-                elif y % self.k == 0:
-                    precomputed[(x, y)] = torch.cat([P00[:self.dims // 2], P10[self.dims // 2:]])
-                else:
-                    precomputed[(x, y)] = torch.cat([
-                        P00[:self.dims // 4],
-                        P10[self.dims // 4:self.dims // 2],
-                        P01[self.dims // 2:3 * self.dims // 4],
-                        P11[3 * self.dims // 4:] ])
+        P00 = self.corner_hvs(idx_00.clone().detach())
+        P01 = self.corner_hvs(idx_01.clone().detach())
+        P10 = self.corner_hvs(idx_10.clone().detach())
+        P11 = self.corner_hvs(idx_11.clone().detach())
 
-        print("[DEBUG] Successfully Precomputed All Position Hypervectors.\n")
+        precomputed = torch.cat([P00[:, :self.dims // 4],
+                                 P10[:, self.dims // 4:self.dims // 2],
+                                 P01[:, self.dims // 2:3 * self.dims // 4],
+                                 P11[:, 3 * self.dims // 4:]], dim=1)
+
         return precomputed
+
     def get_position_hv(self, x, y): #Retrieve a precomputed position hypervector
         return self.precomputed_positions[(x, y)]

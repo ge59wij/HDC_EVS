@@ -11,6 +11,11 @@ import torchhd.functional as functional
 import random
 from torch.utils.data import DataLoader, TensorDataset
 from torch.nn.utils.rnn import pad_sequence
+import time
+start_time = time.time()
+print(f"Execution Time: {time.time() - start_time:.2f} sec")
+
+
 
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
@@ -26,11 +31,11 @@ def main():
     K = 4
     Timewindow = 1000000
     num_classes = 3
-    batches = 1
+    batches = 3
 
     Encoding_Class = GraspHDEventEncoder
     encoding_mode = "encode_grasphd"  # Options: "encode_grasphd", "nsumming"
-    training_mode = "adaptive"  # "centroid" or "adaptive"
+    training_mode = "centroid"  # "centroid" or "adaptive"
     use_iterative_retrain = True
 
     print(f"Using Encoding Mode: {encoding_mode} | Training Mode: {training_mode} | Device: {device}")
@@ -55,6 +60,10 @@ def main():
     # Initialize class vectors for adaptive update
     class_vectors = torchhd.random(num_classes, DIMS, "MAP", device=device)
     class_vectors = train_model(train_loader, encode_method, training_mode, class_vectors, use_iterative_retrain)
+    with torch.autograd.profiler.profile(use_cuda=False) as prof:
+        train_model(train_loader, encode_method, training_mode, class_vectors, use_iterative_retrain)
+    print(prof.key_averages().table(sort_by="cpu_time_total"))
+
     evaluate_model(class_vectors, test_loader, encode_method)
 
 
