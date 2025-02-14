@@ -12,7 +12,7 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         self.time_hv_cache = {}
 
     def encode_grasphd(self, events, class_id):
-        """Encodes events using GraspHD method following the correct paper method."""
+        """Encodes events using GraspHD method"""
         print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
         time_dict = {}
         # **Step 1: Compute Spatial Encoding Per Event**

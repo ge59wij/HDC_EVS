@@ -39,7 +39,7 @@ class GraspHDseedEncoder:
             self.time_hvs[i] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
 
         # **Step 2: Generate Interpolated Bin Hypervectors**
-        print(f"Interpolating and caching {num_bins - 1} bin time hypervectors...")
+        print(f"Interpolating and caching **{num_bins - 1}** bin time hypervectors...")
 
         for i in range(num_bins - 1):
             T_iK = self.time_hvs[i]  # Start bin hypervector

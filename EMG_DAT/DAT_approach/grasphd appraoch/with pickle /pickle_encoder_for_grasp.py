@@ -24,6 +24,7 @@ def main():
 
     dataset_train = load_pickle_dataset(dataset_path, split="train", max_samples=max_samples_train)
     dataset_test = load_pickle_dataset(dataset_path, split="test", max_samples=max_samples_test)
+
     max_time_train = get_max_time(dataset_train)
     max_time_test = get_max_time(dataset_test)
     max_time = max(max_time_train, max_time_test)
