@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 from grasphdencoding import GraspHDEventEncoder
 from torchhd.models import Centroid
 import random
-
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
 

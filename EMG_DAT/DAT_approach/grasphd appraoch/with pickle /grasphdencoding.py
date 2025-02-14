@@ -2,7 +2,6 @@ import torch
 import torchhd
 from grasphdencoding_seedhvs import GraspHDseedEncoder
 import numpy as np
-
 np.set_printoptions(suppress=True, precision=8)
 
 

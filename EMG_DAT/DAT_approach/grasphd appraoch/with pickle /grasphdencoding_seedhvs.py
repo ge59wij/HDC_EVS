@@ -1,7 +1,6 @@
 import torch
 import torchhd
 import numpy as np
-
 np.set_printoptions(suppress=True, precision=8)
 
 
