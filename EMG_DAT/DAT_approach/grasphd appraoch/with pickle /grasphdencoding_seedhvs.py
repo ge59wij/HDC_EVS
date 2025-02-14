@@ -1,108 +1,119 @@
 import torch
 import torchhd
 import numpy as np
-import warnings
-
 
 np.set_printoptions(suppress=True, precision=8)
 
+
 class GraspHDseedEncoder:
     def __init__(self, height, width, dims, time_subwindow, k, device, max_time):
-        print(f"SEED ENCODER: Received params = {height, width, dims, time_subwindow, k, device, max_time}")
         print("Initializing Seed Encoder...")
         self.height = height
         self.width = width
         self.dims = dims
         self.time_subwindow = time_subwindow
-        self.k = int(k)
+        self.k = k
         self.device = torch.device(device) if isinstance(device, str) else device
-        # **Polarity Hypervectors**
-        print("Generating 2 Polarity seed Hypervectors...")
-        self.H_I_plus = torchhd.random(1, dims, "MAP", device=self.device).squeeze(0)
-        self.H_I_minus = -self.H_I_plus
-
-        # **Position Hypervectors (Corner-Based)**
-        print("Generating Position seed Hypervectors...")
-        num_rows = self.height // self.k + 1
-        num_cols = self.width // self.k + 1
-        num_corners = num_rows * num_cols
-        num_interpolation = (self.height * self.width) - num_corners
-        print(f"number of Corners: {num_corners}, Number Interpolated HVS: {num_interpolation}. [ number rows {num_rows}, number cols {num_cols}]")
-        self.corner_hvs = torchhd.embeddings.Random(num_corners, dims, "MAP", device=self.device)
-        print(f"Generated {num_corners} Corner HVS")
-        self.precomputed_positions = self._precompute_position_hvs(num_cols, num_rows)        # **Precompute position hypervectors (Concatenation-based)** #307,200 iterations!!!!!!!!!!
-        print(f"Generated {num_interpolation} Position HVS")
-
-        # **Time Hypervectors**
         self.max_time = max_time
-        print(f"Max Time: {self.max_time} µs | Time Window: {self.time_subwindow} µs")
-        self.num_time_bins = int(np.ceil(self.max_time / self.time_subwindow)) + 1
-        print(f"[INFO] Precomputing {self.num_time_bins} border-time hypervectors...")
-        self.time_hvs = torchhd.random(self.num_time_bins, self.dims, "MAP", device=self.device)
-        # **Precompute Interpolated Time HVs**
-        self.interpolated_hvs = self._precompute_interpolated_time_hvs()
-        #self.time_hv_cache = {}  # Caching to avoid redundant interpolations #(Concatenation-based)
+
+        self.H_I_on = torchhd.random(1, dims, "MAP", device=self.device).squeeze(0)
+        self.H_I_off = -self.H_I_on
+
+        num_corners = ((self.width // self.k) + 1) * ((self.height // self.k) + 1)
+        self.corner_hvs = torchhd.embeddings.Random(num_corners, dims, "MAP", device=self.device)
+        print(f"Generated 2 Polarity hvs. Generated {num_corners} Random Corner hvs.")
+
+        # **Position Interpolated Hypervectors - Lazy Initialization**
+        self.position_hvs_cache = {}  # Store computed hypervectors on demand
+        # **Time Hypervector Initialization**
+        self._generate_time_hvs()
+
+    def _generate_time_hvs(self):
+        """Generate and store all time hypervectors, including border and bin interpolated ones."""
+        self.time_hvs = {}  # Dictionary storing all hypervectors
+
+        # **Step 1: Generate Time Borders**
+        num_bins = int(self.max_time // self.time_subwindow) + 1
+        print(f"Generating {num_bins} border seed hypervectors...")
+
+        for i in range(num_bins):
+            self.time_hvs[i] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
+
+        # **Step 2: Generate Interpolated Bin Hypervectors**
+        print(f"Interpolating and caching {num_bins - 1} bin time hypervectors...")
+
+        for i in range(num_bins - 1):
+            T_iK = self.time_hvs[i]  # Start bin hypervector
+            T_next = self.time_hvs[i + 1]  # Next bin hypervector
+
+            # **Ensure correct slicing sum to DIMS!!!!!!!!!!!!!**
+            alpha_t = 1 / num_bins  # Uniform bin spacing
+            num_from_T_i = int((1 - alpha_t) * self.dims)
+            num_from_T_next = self.dims - num_from_T_i  # Ensure total = self.dims
+
+            interpolated_hv = torch.cat((T_iK[:num_from_T_i], T_next[-num_from_T_next:]), dim=0)
+
+            #  Ensure correct dimension**
+            assert interpolated_hv.shape[
+                       0] == self.dims, f"Incorrect dimension {interpolated_hv.shape[0]}, expected {self.dims}"
+
+            self.time_hvs[i + 0.5] = interpolated_hv  # Store under 0.5 step index
+
+        print(f"Time hypervectors initialized. {len(self.time_hvs)} total vectors stored.")
 
     def get_time_hv(self, time):
-        """Retrieve a time hypervector efficiently using precomputed values."""
+        """Retrieve precomputed time hypervector based on event timestamp."""
+        bin_index = time // self.time_subwindow  # Get the bin index
+        bin_fraction = (time % self.time_subwindow) / self.time_subwindow
 
-        # Identify which time bin we are in
-        i = int(time // self.time_subwindow)
-        i = min(i, self.num_time_bins - 1)  # Clip to last bin if needed
+        if bin_fraction < 0.5:
+            T_t = self.time_hvs[bin_index]
+        else:
+            T_t = self.time_hvs[bin_index + 0.5]
 
-        # **If exactly at the border, return precomputed border hypervector**
-        if time % self.time_subwindow == 0:
-            return self.time_hvs[i]
+        #print(f"[DEBUG] Fetching Time HV at t={time} | Shape: {T_t.shape}")
+        return T_t
 
-        # **Otherwise, fetch precomputed interpolated hypervector**
-        interpolated_index = min(i, self.num_time_bins - 2)  # Ensure valid index
-        return self.interpolated_hvs[interpolated_index]
-    def _precompute_interpolated_time_hvs(self):
-        """Precompute all interpolated time hypervectors and store them in a tensor for fast lookup."""
-        print(f"[INFO] Precomputing {self.num_time_bins - 1} interpolated time hypervectors...")
+    def get_position_hv(self, x, y):
+        """Compute position hypervector only when needed, then cache it."""
+        if (x, y) in self.position_hvs_cache:
+            return self.position_hvs_cache[(x, y)]
 
-        interpolated_hvs = torch.zeros((self.num_time_bins - 1, self.dims), device=self.device)
+        # Compute indices
+        num_rows = self.height // self.k + 1
+        num_cols = self.width // self.k + 1
 
-        for i in range(self.num_time_bins - 1):
-            T_i = self.time_hvs[i]
-            T_next = self.time_hvs[i + 1]
+        i = min(x // self.k, num_rows - 1)
+        j = min(y // self.k, num_cols - 1)
+        i_next = min(i + 1, num_rows - 1)
+        j_next = min(j + 1, num_cols - 1)
 
-            # Generate interpolated hypervectors for different fractions within the time bin
-            for j in range(1, self.time_subwindow):  # Assuming we want interpolation within each bin
-                alpha_t = j / self.time_subwindow  # Fraction within the window
-                split_index = int((1 - alpha_t) * self.dims)  # Elements taken from T_i
+        idx_00 = i * num_cols + j
+        idx_01 = i * num_cols + j_next
+        idx_10 = i_next * num_cols + j
+        idx_11 = i_next * num_cols + j_next
 
-                interpolated_hvs[i] = torch.cat((T_i[:split_index], T_next[split_index:]), dim=0)
+        # Retrieve corner hypervectors
+        P00 = self.corner_hvs(torch.tensor(idx_00, dtype=torch.long, device=self.device))
+        P01 = self.corner_hvs(torch.tensor(idx_01, dtype=torch.long, device=self.device))
+        P10 = self.corner_hvs(torch.tensor(idx_10, dtype=torch.long, device=self.device))
+        P11 = self.corner_hvs(torch.tensor(idx_11, dtype=torch.long, device=self.device))
 
-        print("[DEBUG] Successfully Precomputed All Interpolated Time Hypervectors.\n")
-        return interpolated_hvs
+        # Compute the proportions for each quarter
+        if x % self.k == 0 and y % self.k == 0:
+            position_hv = P00
+        elif x % self.k == 0:
+            position_hv = torch.cat([P00[:self.dims // 2], P01[self.dims // 2:]])
+        elif y % self.k == 0:
+            position_hv = torch.cat([P00[:self.dims // 2], P10[self.dims // 2:]])
+        else:
+            position_hv = torch.cat([
+                P00[:self.dims // 4],
+                P10[self.dims // 4:self.dims // 2],
+                P01[self.dims // 2:3 * self.dims // 4],
+                P11[3 * self.dims // 4:]
+            ])
 
-    def _precompute_position_hvs(self, num_cols, num_rows):
-        """Vectorized approach to precompute position hypervectors."""
-        x_indices = torch.arange(self.width, device=self.device).unsqueeze(1)  # (640, 1)
-        y_indices = torch.arange(self.height, device=self.device).unsqueeze(0)  # (1, 480)
-
-        i = torch.clamp(x_indices // self.k, max=num_rows - 1)
-        j = torch.clamp(y_indices // self.k, max=num_cols - 1)
-        i_next = torch.clamp(i + 1, max=num_rows - 1)
-        j_next = torch.clamp(j + 1, max=num_cols - 1)
-
-        idx_00 = (i * num_cols + j).flatten()
-        idx_01 = (i * num_cols + j_next).flatten()
-        idx_10 = (i_next * num_cols + j).flatten()
-        idx_11 = (i_next * num_cols + j_next).flatten()
-
-        P00 = self.corner_hvs(idx_00.clone().detach())
-        P01 = self.corner_hvs(idx_01.clone().detach())
-        P10 = self.corner_hvs(idx_10.clone().detach())
-        P11 = self.corner_hvs(idx_11.clone().detach())
-
-        precomputed = torch.cat([P00[:, :self.dims // 4],
-                                 P10[:, self.dims // 4:self.dims // 2],
-                                 P01[:, self.dims // 2:3 * self.dims // 4],
-                                 P11[:, 3 * self.dims // 4:]], dim=1)
-
-        return precomputed
-
-    def get_position_hv(self, x, y): #Retrieve a precomputed position hypervector
-        return self.precomputed_positions[(x, y)]
+        # Cache the computed position hypervector
+        self.position_hvs_cache[(x, y)] = position_hv
+        return position_hv

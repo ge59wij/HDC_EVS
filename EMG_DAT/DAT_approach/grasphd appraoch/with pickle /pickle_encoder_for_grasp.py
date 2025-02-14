@@ -7,166 +7,92 @@ from tqdm import tqdm
 import seaborn as sns
 import matplotlib.pyplot as plt
 from grasphdencoding import GraspHDEventEncoder
-import torchhd.functional as functional
+from torchhd.models import Centroid
 import random
-from torch.utils.data import DataLoader, TensorDataset
-from torch.nn.utils.rnn import pad_sequence
-import time
-start_time = time.time()
-print(f"Execution Time: {time.time() - start_time:.2f} sec")
-
-
 
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
 
-
 def main():
-    device = "cpu"
-    dataset_path = "/space/chair-nas/tosy/pt_chifoumi"
-    train_split, test_split = "train", "test"
-    max_samples_train = 10
-    max_samples_test = 23
+    device = "cpu" #if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
+    max_samples_train = 30
+    max_samples_test = 11
     DIMS = 4000
-    K = 4
-    Timewindow = 1000000
-    num_classes = 3
-    batches = 3
+    K = 3
+    Timewindow = 50000
 
-    Encoding_Class = GraspHDEventEncoder
-    encoding_mode = "encode_grasphd"  # Options: "encode_grasphd", "nsumming"
-    training_mode = "centroid"  # "centroid" or "adaptive"
-    use_iterative_retrain = True
+    dataset_train = load_pickle_dataset(dataset_path, split="train", max_samples=max_samples_train)
+    dataset_test = load_pickle_dataset(dataset_path, split="test", max_samples=max_samples_test)
+    max_time_train = get_max_time(dataset_train)
+    max_time_test = get_max_time(dataset_test)
+    max_time = max(max_time_train, max_time_test)
+    print(f"[INFO] Computed max_time: {max_time} (Train: {max_time_train}, Test: {max_time_test})")
 
-    print(f"Using Encoding Mode: {encoding_mode} | Training Mode: {training_mode} | Device: {device}")
+    encoder = GraspHDEventEncoder(height=480, width=640, dims=DIMS, time_subwindow=Timewindow, k=K, device=device, max_time= max_time)
 
-    # Load datasets (NOW OUTPUTS TENSORS)
-    train_loader, train_max_time = load_tensor_dataset(dataset_path, train_split, max_samples_train, batches, device)
-    test_loader, test_max_time = load_tensor_dataset(dataset_path, test_split, max_samples_test, batches, device)
+    encoded_vectors, class_labels = [], []
+    for sample_id, (events, class_id) in tqdm(enumerate(dataset_train), total=len(dataset_train), desc="Encoding Samples"):
+        encoded_sample = encoder.encode_grasphd(events, class_id)
+        encoded_vectors.append(encoded_sample)
+        class_labels.append(class_id)
 
-    max_time = max(train_max_time, test_max_time)
-    print(f"[INFO] Adjusted Global Maximum Timestamp: {max_time} µs")
+    encoded_matrix = torch.stack(encoded_vectors)
 
-    encoder = Encoding_Class(480, 640, DIMS, Timewindow, K, device, max_time)
-    encoding_methods = {
-        "encode_grasphd": encoder.encode_grasphd,
-        "nsumming": encoder.encode_grasp_n_summing, }
+    #   Train Centroid Classifier**
+    model = Centroid(DIMS, len(set(class_labels)))
+    with torch.no_grad():
+        for vec, label in zip(encoded_matrix, class_labels):
+            label_tensor = torch.tensor([label], dtype=torch.long, device=vec.device)  # Convert label to Tensor!!
+            model.add(vec, label_tensor)
+    model.normalize()
 
-    encode_method = encoding_methods.get(encoding_mode)
+    similarity_matrix = torchhd.cosine_similarity(encoded_matrix, model.weight)
 
-    if encode_method is None: raise ValueError(
-        f"Invalid encoding mode '{encoding_mode}'. Choose from: {list(encoding_methods.keys())}")
+    plot_with_parameters(similarity_matrix, class_labels, K, Timewindow, DIMS, max_samples_train)
 
-    # Initialize class vectors for adaptive update
-    class_vectors = torchhd.random(num_classes, DIMS, "MAP", device=device)
-    class_vectors = train_model(train_loader, encode_method, training_mode, class_vectors, use_iterative_retrain)
-    with torch.autograd.profiler.profile(use_cuda=False) as prof:
-        train_model(train_loader, encode_method, training_mode, class_vectors, use_iterative_retrain)
-    print(prof.key_averages().table(sort_by="cpu_time_total"))
-
-    evaluate_model(class_vectors, test_loader, encode_method)
-
-
-def load_tensor_dataset(dataset_path, split, max_samples, batch_size, device):
+def plot_with_parameters(similarity_matrix, class_labels, k, Timewindow, dims, max_samples):
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        similarity_matrix.cpu().numpy(),
+        annot=True,
+        cmap="coolwarm",
+        fmt=".2f",
+        xticklabels=class_labels,
+        yticklabels=class_labels,
+        cbar=True,
+    )
+    plt.title(f"Cosine Similarity GRASPHD Heatmap (k={k}, dims={dims}, timewindow= {Timewindow}, samples={max_samples})")
+    plt.xlabel("Sample Index (Class ID)")
+    plt.ylabel("Sample Index (Class ID)")
+    plt.show()
+def load_pickle_dataset(dataset_path, split, max_samples):
     """
-    Loads event tensors and labels directly from .pt files.
+    Returns List[Tuple]: A list of tuples (events, class_id), where events are the event tuples (t, (x, y), p).
     """
     split_path = os.path.join(dataset_path, split)
-    files = [os.path.join(split_path, f) for f in os.listdir(split_path) if f.endswith('.pt')]
-
-    event_list, label_list, mask_list = [], [], []
-    max_time = 3600000
-
+    files = [os.path.join(split_path, f) for f in os.listdir(split_path) if f.endswith('.pkl')]
+    random.shuffle(files)
+    dataset = []
     for file in files[:max_samples]:
-        data = torch.load(file)
-        events_tensor, label_tensor = data["events"], data["label"]
-
-        if label_tensor.dim() == 0:
-            label_tensor = label_tensor.unsqueeze(0)
-
-        events_tensor = events_tensor.to(device)
-        label_tensor = label_tensor.to(device)
-
-        event_list.append(events_tensor)
-        label_list.append(label_tensor)
-        mask_list.append(torch.ones(events_tensor.shape[0], dtype=torch.bool, device=device))  # Create mask
-
-    # Pad event tensors and masks
-    padded_events = pad_sequence(event_list, batch_first=True, padding_value=0)
-    padded_mask = pad_sequence(mask_list, batch_first=True, padding_value=False)  # False = ignored
-
-    dataset = TensorDataset(padded_events, padded_mask, torch.stack(label_list))
-    return DataLoader(dataset, batch_size=batch_size, shuffle=True), max_time
-
-
-def train_model(train_loader, encode_method, training_mode, class_vectors, use_iterative_retrain=False):
+        with open(file, 'rb') as f:
+            events, class_id = pickle.load(f)
+        dataset.append((events, class_id))
+    print(f"Loaded {len(dataset)} samples from {split} split.")
+    return dataset
+def get_max_time(dataset):
     """
-    Train using either centroid-based or adaptive update (grasphd paper).
-    Adaptive learning updates class hypervectors based on similarity.
-    Iterative retraining (if enabled) refines them further.
+    Extracts the maximum timestamp from the dataset.
+    Since timestamps are stored as the first element in the event tuples,
+    we look at the last event in each sample and return the largest timestamp.
     """
-    print(f"\n[TRAINING] Using {training_mode} method | Iterative Retraining: {use_iterative_retrain}\n")
-
-    l = 0.1  # Learning rate
-
-    if training_mode == "centroid":
-        classifier = torchhd.models.Centroid(class_vectors.shape[1], class_vectors.shape[0],
-                                             device=class_vectors.device)
-        with torch.no_grad():
-            for batch_events, batch_mask, batch_labels in tqdm(train_loader, desc="Training (Centroid)"):
-                encoded_batch = encode_method(batch_events, batch_mask, batch_labels)  # ✅ Pass `batch_mask`
-                classifier.add(encoded_batch, batch_labels)
-        classifier.normalize()
-
-    elif training_mode == "adaptive":
-        # **Adaptive Training (Initial Learning)**
-        for batch_events, batch_mask, batch_labels in tqdm(train_loader, desc="Training Adaptive"):
-            batch_labels = batch_labels.view(-1)  # Ensure batch_labels is at least 1D
-            encoded_batch = encode_method(batch_events, batch_mask, batch_labels)  #  Pass `batch_mask`
-            for i in range(len(encoded_batch)):
-                w_correct = torchhd.cosine_similarity(class_vectors[batch_labels[i]], encoded_batch[i])
-                class_vectors[batch_labels[i]] += l * w_correct * encoded_batch[i]
-
-        # **Iterative Retraining (Optional)**
-        if use_iterative_retrain:
-            for epoch in range(4):  # Number of epochs
-                for batch_events, batch_mask, batch_labels in tqdm(train_loader,
-                                                                   desc=f"Iterative Retraining (Epoch {epoch + 1})"):
-                    encoded_batch = encode_method(batch_events, batch_mask, batch_labels)  # ✅ Pass `batch_mask`
-                    for i in range(len(encoded_batch)):
-                        prediction = torch.argmax(torchhd.cosine_similarity(class_vectors, encoded_batch[i]))
-
-                        if prediction != batch_labels[i]:  # Only update if misclassified
-                            w_correct = torchhd.cosine_similarity(class_vectors[batch_labels[i]], encoded_batch[i])
-                            w_wrong = torchhd.cosine_similarity(class_vectors[prediction], encoded_batch[i])
-
-                            class_vectors[batch_labels[i]] += l * (1 - w_correct) * encoded_batch[i]
-                            class_vectors[prediction] -= l * (1 - w_wrong) * encoded_batch[i]
-
-        class_vectors = torchhd.normalize(class_vectors)
-
-    print(f"\n[INFO] Final Class Hypervectors (Norm Check): {torch.norm(class_vectors, dim=1)}")
-    return class_vectors
-
-
-def evaluate_model(class_vectors, test_loader, encode_method):
-    """
-    cosine similarity.
-    """
-    print("\n[TESTING] Evaluating Model...\n")
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for batch_events, batch_mask, batch_labels in test_loader:
-            encoded_test_samples = encode_method(batch_events, batch_mask, batch_labels)  # Pass the mask
-            similarities = torchhd.cosine_similarity(class_vectors, encoded_test_samples)
-            predicted_labels = torch.argmax(similarities, dim=1)
-            correct += (predicted_labels == batch_labels).int().sum().item()
-            total += batch_labels.numel()
-
-    accuracy = correct / total * 100 if total > 0 else 0
-    print(f"\n[RESULT] Test Accuracy: {accuracy:.2f}% ({correct}/{total} correct)\n")
-
+    max_time = 0
+    for events, _ in dataset:
+        if len(events) > 0:  # Properly check if events list is non-empty
+            last_timestamp = events[-1][0]  # First element of the last tuple
+            max_time = max(max_time, last_timestamp)
+    return max_time
 
 if __name__ == "__main__":
     main()

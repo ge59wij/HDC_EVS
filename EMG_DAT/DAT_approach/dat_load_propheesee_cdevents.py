@@ -10,11 +10,7 @@ import matplotlib.pyplot as plt
 def load_cd_events(filename):
     """
     Loads CD events from Prophesee `.dat` files and performs thorough debugging to identify issues with `x` and `y` values.
-
-    Parameters:
         filename (str): Path to the file.
-
-    Returns:
         dict: A dictionary containing 'ts', 'x', 'y', and 'p'.
     """
     header = []
