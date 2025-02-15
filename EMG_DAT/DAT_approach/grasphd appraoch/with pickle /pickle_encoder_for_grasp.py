@@ -13,7 +13,8 @@ torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
 import torchmetrics
 
-
+TRAINING_METHOD = "adaptive"  # Options: "centroid", "adaptive", "iterative"
+LEARNING_RATE = 0.5  # For adaptive & iterative methods
 
 def main():
     device = "cpu" #if torch.cuda.is_available() else "cpu"
@@ -47,13 +48,15 @@ def main():
     encoded_matrix = torch.stack(encoded_vectors)
     label_tensor = torch.tensor(class_labels, dtype=torch.long, device=device)  # Keep labels as tensor
 
+    model = train_model(encoded_matrix, label_tensor, DIMS, len(set(class_labels)), TRAINING_METHOD)
+
+    '''
     # **Train Centroid Classifier (Batch)**
     model = Centroid(DIMS, len(set(class_labels)))
     with torch.no_grad():
         model.add(encoded_matrix, label_tensor)  # Batch adding instead of looping one by one
-
-    # **Normalize Before Testing**
-    model.normalize()
+        model.normalize()
+    '''
 
     # **Testing Phase**
     accuracy = torchmetrics.Accuracy("multiclass", num_classes=len(set(class_labels)))
@@ -79,7 +82,23 @@ def main():
     similarity_matrix = torchhd.cosine_similarity(encoded_matrix, model.weight)
     plot_with_parameters(similarity_matrix, class_labels, K, Timewindow, DIMS, max_samples_train)
 
-
+def train_model(encoded_matrix, label_tensor, dims, num_classes, method):
+    """Train the model using the selected method."""
+    model = Centroid(dims, num_classes)
+    with torch.no_grad():
+        if method == "centroid":
+            print("Training with Centroid")
+            model.add(encoded_matrix, label_tensor)
+        elif method == "adaptive":
+            print("Training with AdaptHD")
+            model.add_adapt(encoded_matrix, label_tensor, lr=LEARNING_RATE)
+        elif method == "iterative":
+            print("Training with Iterative Learning (OnlineHD)")
+            model.add_online(encoded_matrix, label_tensor, lr=LEARNING_RATE)
+        else:
+            raise ValueError(" Invalid training method. Choose from 'centroid', 'adaptive', or 'iterative'.")
+    model.normalize()
+    return model
 def plot_with_parameters(similarity_matrix, class_labels, k, Timewindow, dims, max_samples):
     plt.figure(figsize=(12, 10))
     sns.heatmap(
