@@ -9,12 +9,11 @@ np.set_printoptions(suppress=True, precision=8)
 class GraspHDEventEncoder(GraspHDseedEncoder):
     def __init__(self, height, width, dims, k, time_subwindow, device, max_time):
         super().__init__(height, width, dims, time_subwindow, k, device, max_time)
-
         self.time_hv_cache = {}
 
     def encode_grasphd(self, events, class_id):
         """Encodes events using GraspHD method, added subwindow-based accumulation"""
-        print(f"\nEncoding {len(events)} events | Class: {class_id} | Device: {self.device}")
+        print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
 
         subwindow_dict = {}     # for accumulated spatial vectors
         # **Step 1: Compute Spatial Encoding Per Event then GROUP per subwindow.**

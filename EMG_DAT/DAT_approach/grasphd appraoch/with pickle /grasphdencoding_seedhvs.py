@@ -6,7 +6,7 @@ np.set_printoptions(suppress=True, precision=8)
 
 class GraspHDseedEncoder:
     def __init__(self, height, width, dims, time_subwindow, k, device, max_time):
-        print("Initializing Seed Encoder...")
+        print("Initializing Seed Encoder:")
         self.height = height
         self.width = width
         self.dims = dims
@@ -21,7 +21,7 @@ class GraspHDseedEncoder:
         # **Position Interpolated Hypervectors - Lazy Initialization, less HVS
         num_corners = ((self.width // self.k) + 1) * ((self.height // self.k) + 1)
         self.corner_hvs = torchhd.embeddings.Random(num_corners, dims, "MAP", device=self.device)
-        print(f"Generated 2 Polarity hvs. Generated {num_corners} Random Corner hvs.")
+        print(f"| Generated 2 Polarity hvs | Generated {num_corners} Random Corner hvs.")
         self.position_hvs_cache = {}
 
         # **Time Hypervectors
@@ -33,13 +33,13 @@ class GraspHDseedEncoder:
 
         # **Step 1: Generate Time Borders**
         num_bins = int(self.max_time // self.time_subwindow) + 1
-        print(f"Generating {num_bins} border seed hypervectors...")
+        #print(f"| Interpolated {num_bins} border seed hypervectors.|")
 
         for i in range(num_bins):
             self.time_hvs[i] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
 
         # **Step 2: Generate Interpolated Bin Hypervectors**
-        print(f"Interpolating and caching **{num_bins - 1}** bin time hypervectors...")
+        print(f"| Interpolating {num_bins - 1} bin time hypervectors...")
 
         for i in range(num_bins - 1):
             T_iK = self.time_hvs[i]  # Start bin hypervector
@@ -58,7 +58,7 @@ class GraspHDseedEncoder:
 
             self.time_hvs[i + 0.5] = interpolated_hv  # Store under 0.5 step index
 
-        print(f"Time hypervectors initialized. {len(self.time_hvs)} total vectors stored.")
+        print(f"| All Time hypervectors initialized: {len(self.time_hvs)} |")
 
     def get_time_hv(self, time):
         """Retrieve precomputed time hypervector based on event timestamp."""
@@ -91,11 +91,14 @@ class GraspHDseedEncoder:
         idx_01 = i * num_cols + j_next
         idx_10 = i_next * num_cols + j
         idx_11 = i_next * num_cols + j_next
+        # Retrieve corner hypervectors (now consistent!)
+        P00 = self.corner_hvs(idx_00)
+        P01 = self.corner_hvs(idx_01)
+        P10 = self.corner_hvs(idx_10)
+        P11 = self.corner_hvs(idx_11)
 
-        P00 = self.corner_hvs(torch.tensor(idx_00, dtype=torch.long, device=self.device))
-        P01 = self.corner_hvs(torch.tensor(idx_01, dtype=torch.long, device=self.device))
-        P10 = self.corner_hvs(torch.tensor(idx_10, dtype=torch.long, device=self.device))
-        P11 = self.corner_hvs(torch.tensor(idx_11, dtype=torch.long, device=self.device))
+        #P00 = self.corner_hvs(torch.tensor(idx_00, dtype=torch.long, device=self.device))
+
 
         # Compute the proportions for each quarter:
         #this: most likely: 2 windows next to each other will get different corners! weird approach but follows paper.
