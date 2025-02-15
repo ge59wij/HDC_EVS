@@ -19,8 +19,8 @@ def main():
     device = "cpu" #if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
-    max_samples_train = 30
-    max_samples_test = 11
+    max_samples_train = 4
+    max_samples_test = 1
     DIMS = 4000
     K = 3
     Timewindow = 10000
@@ -34,24 +34,6 @@ def main():
     print(f"[INFO] Computed max_time: {max_time} (Train: {max_time_train}, Test: {max_time_test})")
 
     encoder = GraspHDEventEncoder(height=480, width=640, dims=DIMS, time_subwindow=Timewindow, k=K, device=device, max_time= max_time)
-
-    encoded_vectors, class_labels = [], []
-    for sample_id, (events, class_id) in tqdm(enumerate(dataset_train), total=len(dataset_train), desc="Encoding Samples"):
-        encoded_sample = encoder.encode_grasphd(events, class_id)
-        encoded_vectors.append(encoded_sample)
-        class_labels.append(class_id)
-
-    encoded_matrix = torch.stack(encoded_vectors)
-
-    #   Train Centroid Classifier**
-    model = Centroid(DIMS, len(set(class_labels)))
-    with torch.no_grad():
-        for vec, label in zip(encoded_matrix, class_labels):
-            label_tensor = torch.tensor([label], dtype=torch.long, device=vec.device)  # Convert label to Tensor!!
-            model.add(vec, label_tensor)
-    model.normalize()
-
-    similarity_matrix = torchhd.cosine_similarity(encoded_matrix, model.weight)
 
     # **Encode Training Data**
     encoded_vectors, class_labels = [], []

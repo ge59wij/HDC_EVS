@@ -2,6 +2,7 @@ import torch
 import torchhd
 from grasphdencoding_seedhvs import GraspHDseedEncoder
 import numpy as np
+
 np.set_printoptions(suppress=True, precision=8)
 
 
@@ -12,32 +13,36 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         self.time_hv_cache = {}
 
     def encode_grasphd(self, events, class_id):
-        """Encodes events using GraspHD method"""
-        print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
-        time_dict = {}
-        # **Step 1: Compute Spatial Encoding Per Event**
+        """Encodes events using GraspHD method, added subwindow-based accumulation"""
+        print(f"\nEncoding {len(events)} events | Class: {class_id} | Device: {self.device}")
+
+        subwindow_dict = {}     # for accumulated spatial vectors
+        # **Step 1: Compute Spatial Encoding Per Event then GROUP per subwindow.**
         for t, x, y, polarity in events:
+            subwindow_index = t // self.time_subwindow
+
             P_xy = self.get_position_hv(x, y)  # Fetch position HV (computed on demand)
             I_p = self.H_I_on if polarity == 1 else self.H_I_off
-            H_spatial = torchhd.bind(P_xy, I_p)  # XOR operation
-
-            # **Step 2: Group by Timestamp**
-            if t not in time_dict:
-                time_dict[t] = H_spatial
+            H_spatial = torchhd.bind(P_xy, I_p)  # XOR operation!
+            # **Accumulate within the same subwindow**
+            if subwindow_index not in subwindow_dict:
+                subwindow_dict[subwindow_index] = H_spatial
             else:
-                time_dict[t] = torchhd.multiset(torch.stack([time_dict[t], H_spatial]))
+                subwindow_dict[subwindow_index] = torchhd.multiset(
+                    torch.stack([subwindow_dict[subwindow_index], H_spatial])
+                )
 
-        # **Step 3: Bind Time Hypervectors**
+        # **Step 2: Bind Subwindow Accumulated HVs to Time HVs**
         H_spatiotemporal = None
-        for t, H_spatial_t in time_dict.items():
-            T_t = self.get_time_hv(t)  # Fetch precomputed time HV
-            H_temporal_t = torchhd.bind(H_spatial_t, T_t)
+        for subwindow_index, H_spatial_accumulated in subwindow_dict.items():
+            T_t = self.get_time_hv(subwindow_index * self.time_subwindow)  # Fetch time HV for this subwindow
+            H_temporal_t = torchhd.bind(H_spatial_accumulated, T_t)
 
-            # **Step 4: Bundle Across Time**
+            # **Step 3: Bundle Across Subwindows**
             H_spatiotemporal = H_temporal_t if H_spatiotemporal is None else \
                 torchhd.multiset(torch.stack([H_spatiotemporal, H_temporal_t]))
 
         # **Normalize Final Hypervector**
         H_spatiotemporal = torchhd.normalize(H_spatiotemporal)
-        print(f"Encoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}")
+        print(f"\nEncoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}")
         return H_spatiotemporal

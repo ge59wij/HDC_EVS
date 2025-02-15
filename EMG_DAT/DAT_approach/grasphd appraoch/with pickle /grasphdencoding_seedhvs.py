@@ -18,13 +18,13 @@ class GraspHDseedEncoder:
         self.H_I_on = torchhd.random(1, dims, "MAP", device=self.device).squeeze(0)
         self.H_I_off = -self.H_I_on
 
+        # **Position Interpolated Hypervectors - Lazy Initialization, less HVS
         num_corners = ((self.width // self.k) + 1) * ((self.height // self.k) + 1)
         self.corner_hvs = torchhd.embeddings.Random(num_corners, dims, "MAP", device=self.device)
         print(f"Generated 2 Polarity hvs. Generated {num_corners} Random Corner hvs.")
+        self.position_hvs_cache = {}
 
-        # **Position Interpolated Hypervectors - Lazy Initialization**
-        self.position_hvs_cache = {}  # Store computed hypervectors on demand
-        # **Time Hypervector Initialization**
+        # **Time Hypervectors
         self._generate_time_hvs()
 
     def _generate_time_hvs(self):
@@ -92,13 +92,13 @@ class GraspHDseedEncoder:
         idx_10 = i_next * num_cols + j
         idx_11 = i_next * num_cols + j_next
 
-        # Retrieve corner hypervectors
         P00 = self.corner_hvs(torch.tensor(idx_00, dtype=torch.long, device=self.device))
         P01 = self.corner_hvs(torch.tensor(idx_01, dtype=torch.long, device=self.device))
         P10 = self.corner_hvs(torch.tensor(idx_10, dtype=torch.long, device=self.device))
         P11 = self.corner_hvs(torch.tensor(idx_11, dtype=torch.long, device=self.device))
 
-        # Compute the proportions for each quarter
+        # Compute the proportions for each quarter:
+        #this: most likely: 2 windows next to each other will get different corners! weird approach but follows paper.
         if x % self.k == 0 and y % self.k == 0:
             position_hv = P00
         elif x % self.k == 0:
@@ -113,6 +113,5 @@ class GraspHDseedEncoder:
                 P11[3 * self.dims // 4:]
             ])
 
-        # Cache the computed position hypervector
         self.position_hvs_cache[(x, y)] = position_hv
         return position_hv
