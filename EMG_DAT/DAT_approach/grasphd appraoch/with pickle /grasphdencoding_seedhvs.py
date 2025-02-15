@@ -65,12 +65,12 @@ class GraspHDseedEncoder:
         bin_index = time // self.time_subwindow  # Get the bin index
         bin_fraction = (time % self.time_subwindow) / self.time_subwindow
 
-        if bin_fraction < 0.5:
-            T_t = self.time_hvs[bin_index]
-        else:
+        # **Fix: Only fetch `bin_index + 0.5` if it exists**
+        if bin_index + 0.5 in self.time_hvs and bin_fraction >= 0.5:
             T_t = self.time_hvs[bin_index + 0.5]
+        else:
+            T_t = self.time_hvs[bin_index]  # Default to the bin index
 
-        #print(f"[DEBUG] Fetching Time HV at t={time} | Shape: {T_t.shape}")
         return T_t
 
     def get_position_hv(self, x, y):
