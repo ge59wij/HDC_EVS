@@ -12,7 +12,7 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         self.time_hv_cache = {}
 
     def encode_grasphd(self, events, class_id):
-        """Encodes events using GraspHD method, added subwindow-based accumulation"""
+        """Encodes events using GraspHD method, added subwindow-based accumulation following the correct paper method."""
         print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
 
         subwindow_dict = {}     # for accumulated spatial vectors

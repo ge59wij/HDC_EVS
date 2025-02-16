@@ -19,7 +19,7 @@ TRAINING_METHOD = "adaptive"  # Options: "centroid", "adaptive", "iterative"
 LEARNING_RATE = 0.5  # For adaptive & iterative methods
 
 def main():
-    device = "cuda" #if torch.cuda.is_available() else "cpu"
+    device = "cpu" #if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
     max_samples_train = 100
