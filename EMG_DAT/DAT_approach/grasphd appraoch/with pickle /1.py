@@ -2,7 +2,7 @@ import torch
 import torchhd
 import random
 from tqdm import tqdm
-from pickle_encoder_for_grasp import load_pickle_dataset, plot_with_parameters, analyze_similarities
+from main_enc import load_pickle_dataset, plot_with_parameters, analyze_similarities
 from grasphdencoding import *
 
 
