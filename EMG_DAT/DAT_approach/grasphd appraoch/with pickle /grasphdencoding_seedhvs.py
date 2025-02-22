@@ -18,12 +18,10 @@ class GraspHDseedEncoder:
         self.H_I_on = torchhd.random(1, dims, "MAP", device=self.device).squeeze(0)
         self.H_I_off = -self.H_I_on
 
-        num_corners = ((self.width // self.k) + 1) * ((self.height // self.k) + 1)
-        self.corner_hvs = torchhd.embeddings.Random(num_corners, dims, "MAP", device=self.device)
-        print(f"| Generated 2 Polarity hvs | Generated {num_corners} Random Corner hvs.")
-        self.position_hvs_cache = {}
+        # Remove manual corner grid initialization
+        self._precompute_corners()  # Moved all corner logic here
 
-
+        print(f"| Generated 2 Polarity hvs | Generated Random Corner hvs.")
         self._generate_time_hvs()
 
     def _generate_time_hvs(self):
@@ -57,15 +55,8 @@ class GraspHDseedEncoder:
                 time_key = int(i * self.time_subwindow)  # Ensure integer keys
                 self.time_hvs[time_key] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
             print(
-                f"| Using {self.time_interpolation_methode}, caching dynamically | Initial anchors: {len(self.time_hvs)} Timevectors.")
+                f"| Using {self.time_interpolation_method}, caching dynamically | Initial anchors: {len(self.time_hvs)} Timevectors.")
 
-        elif self.time_interpolation_method == "linear_interpolation":
-            # Generate anchor time vectors at bin intervals
-            for i in range(num_bins):
-                time_key = int(i * self.time_subwindow)  # Ensure integer keys
-                self.time_hvs[time_key] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
-
-            print(f"| Using Linear Interpolation for Time HVs | Initial anchors: {len(self.time_hvs)} Timevectors.")
 
         elif self.time_interpolation_method == "encode_temporalpermutation":
             """Uses identity vectors and shifts them based on time."""
@@ -177,79 +168,103 @@ class GraspHDseedEncoder:
 
 
     #-----------------Spatial-----------------------------------
-    def get_position_hv(self, x, y):
-        """Compute position hypervector only when active, then cache it, with association"""
-        if (x, y) in self.position_hvs_cache:
-            return self.position_hvs_cache[(x, y)]
 
-        num_rows = self.height // self.k + 1
-        num_cols = self.width // self.k + 1
+    def _precompute_corners(self):
+        """Precompute corners, virtual corners, and populate cache."""
+        # Generate corner positions with virtual extension
+        self.corner_x_positions = list(range(0, self.width, self.k))
+        self.corner_y_positions = list(range(0, self.height, self.k))
 
-        i = min(x // self.k, num_rows - 1)
-        j = min(y // self.k, num_cols - 1)
-        i_next = min(i + 1, num_rows - 1)
-        j_next = min(j + 1, num_cols - 1)
+        # Extend to virtual corners if needed
+        if self.width % self.k != 0:
+            self.corner_x_positions.append(self.width)
+        if self.height % self.k != 0:
+            self.corner_y_positions.append(self.height)
 
-        idx_00 = i * num_cols + j
-        idx_01 = i * num_cols + j_next
-        idx_10 = i_next * num_cols + j
-        idx_11 = i_next * num_cols + j_next
+        # Generate corner grid
+        self.corner_grid = torch.empty(
+            (len(self.corner_x_positions), len(self.corner_y_positions), self.dims),
+            device=self.device
+        )
+        for i, x in enumerate(self.corner_x_positions):
+            for j, y in enumerate(self.corner_y_positions):
+                self.corner_grid[i, j] = torchhd.random(1, self.dims, "MAP", device=self.device)
 
-        P00 = self.corner_hvs.weight[int(idx_00)]
-        P01 = self.corner_hvs.weight[int(idx_01)]
-        P10 = self.corner_hvs.weight[int(idx_10)]
-        P11 = self.corner_hvs.weight[int(idx_11)]
+        # Preload corners into cache
+        self.x_to_index = {x: i for i, x in enumerate(self.corner_x_positions)}
+        self.y_to_index = {y: j for j, y in enumerate(self.corner_y_positions)}
+        self.position_hvs_cache = {
+            (x, y): self.corner_grid[i, j]
+            for i, x in enumerate(self.corner_x_positions)
+            for j, y in enumerate(self.corner_y_positions)
+        }
 
+    def _interpolate_hv(self, x, y):
+        """Core interpolation logic."""
+        # Clamp coordinates to grid bounds
+        x_clamped = min(max(x, 0), self.width)
+        y_clamped = min(max(y, 0), self.height)
 
-        # Compute the proportions for each quarter:
-        #this: most likely: 2 windows next to each other will get different corners! weird approach but follows paper.
-        if x % self.k == 0 and y % self.k == 0:
-            position_hv = P00
-        elif x % self.k == 0:
-            position_hv = torch.cat([P00[:self.dims // 2], P01[self.dims // 2:]])
-        elif y % self.k == 0:
-            position_hv = torch.cat([P00[:self.dims // 2], P10[self.dims // 2:]])
-        else:
-            position_hv = torch.cat([
-                P00[:self.dims // 4],
-                P10[self.dims // 4:self.dims // 2],
-                P01[self.dims // 2:3 * self.dims // 4],
-                P11[3 * self.dims // 4:]
-            ])
+        # Find surrounding corners
+        i = max(0, np.searchsorted(self.corner_x_positions, x_clamped) - 1)
+        j = max(0, np.searchsorted(self.corner_y_positions, y_clamped) - 1)
 
-        self.position_hvs_cache[(x, y)] = position_hv
+        i_next = min(i + 1, len(self.corner_x_positions) - 1)
+        j_next = min(j + 1, len(self.corner_y_positions) - 1)
+
+        # Get corner coordinates
+        x0, x1 = self.corner_x_positions[i], self.corner_x_positions[i_next]
+        y0, y1 = self.corner_y_positions[j], self.corner_y_positions[j_next]
+
+        # Retrieve HVs from corner_grid (not a local dict)
+        i_x0 = self.x_to_index[x0]
+        j_y0 = self.y_to_index[y0]
+        P00 = self.corner_grid[i_x0, j_y0]
+
+        i_x1 = self.x_to_index[x1]
+        P10 = self.corner_grid[i_x1, j_y0]
+
+        j_y1 = self.y_to_index[y1]
+        P01 = self.corner_grid[i_x0, j_y1]
+        P11 = self.corner_grid[i_x1, j_y1]
+
+        # interpolation weights
+        dx = max(x1 - x0, 1e-9)
+        dy = max(y1 - y0, 1e-9)
+        lambda_x = min(max((x_clamped - x0) / dx, 0.0), 1.0)  # Clamp between 0 and 1
+        lambda_y = min(max((y_clamped - y0) / dy, 0.0), 1.0)  # Clamp between 0 and 1
+
+        #print(f"  Weights: λ_x={lambda_x:.2f}, λ_y={lambda_y:.2f}")
+
+        # Compute segment sizes (global indices)
+        split_00 = round((1 - lambda_x) * (1 - lambda_y) * self.dims)
+        split_10 = round(lambda_x * (1 - lambda_y) * self.dims)
+        split_01 = round((1 - lambda_x) * lambda_y * self.dims)
+        split_11 = self.dims - (split_00 + split_10 + split_01)
+
+        # Ensure the sum of splits equals self.dims
+        assert split_00 + split_10 + split_01 + split_11 == self.dims, "Split sizes do not sum to self.dims!"
+
+        # Global indices for each segment (same across all interpolations!!)
+        idx_00 = slice(0, split_00)
+        idx_10 = slice(split_00, split_00 + split_10)
+        idx_01 = slice(split_00 + split_10, split_00 + split_10 + split_01)
+        idx_11 = slice(split_00 + split_10 + split_01, self.dims)
+        '''
+        print(f"  Global Indices:")
+        print(f"    P00: {idx_00.start}-{idx_00.stop}")
+        print(f"    P10: {idx_10.start}-{idx_10.stop}")
+        print(f"    P01: {idx_01.start}-{idx_01.stop}")
+        print(f"    P11: {idx_11.start}-{idx_11.stop}")
+        '''
+        # Concatenate using global indices (same for all HVs)
+        position_hv = torch.cat([
+            P00[idx_00],
+            P10[idx_10],
+            P01[idx_01],
+            P11[idx_11]
+        ])
+
+        assert position_hv.shape[0] == self.dims, f"Size mismatch! Expected {self.dims}, got {position_hv.shape[0]}"
+        #print(f" HV size = {position_hv.shape[0]}")
         return position_hv
-
-    def weighted_position_hv(self, x, y):
-        """Compute position hypervector using weighted linear interpolation instead of concatenation.""" #wrong!
-        if (x, y) in self.position_hvs_cache:
-            return self.position_hvs_cache[(x, y)]
-
-        num_rows = self.height // self.k + 1
-        num_cols = self.width // self.k + 1
-
-        i = min(x // self.k, num_rows - 1)
-        j = min(y // self.k, num_cols - 1)
-        i_next = min(i + 1, num_rows - 1)
-        j_next = min(j + 1, num_cols - 1)
-
-        idx_00 = i * num_cols + j
-        idx_01 = i * num_cols + j_next
-        idx_10 = i_next * num_cols + j
-        idx_11 = i_next * num_cols + j_next
-
-        P00 = self.corner_hvs.weight[int(idx_00)]
-        P01 = self.corner_hvs.weight[int(idx_01)]
-        P10 = self.corner_hvs.weight[int(idx_10)]
-        P11 = self.corner_hvs.weight[int(idx_11)]
-
-        dx = (x % self.k) / self.k
-        dy = (y % self.k) / self.k
-
-        # **Linear Interpolation**
-        P_x0 = (1 - dx) * P00 + dx * P10  # x-axis (top row)
-        P_x1 = (1 - dx) * P01 + dx * P11  # x-axis (bottom row)
-        P_final = (1 - dy) * P_x0 + dy * P_x1  #  y-axis
-
-        self.position_hvs_cache[(x, y)] = P_final
-        return P_final

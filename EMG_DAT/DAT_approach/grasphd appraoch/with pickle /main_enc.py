@@ -1,26 +1,25 @@
 import torch
 import torchhd
-import numpy as np
 import os
 import pickle
 from tqdm import tqdm
 from grasphdencoding import GraspHDEventEncoder
 from torchhd.models import Centroid
 import random
-torch.set_printoptions(sci_mode=False)
-np.set_printoptions(suppress=True, precision=8)
 import torchmetrics
 import torchhd.utils
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.manifold import TSNE
 import numpy as np
+torch.set_printoptions(sci_mode=False)
+np.set_printoptions(suppress=True, precision=8)
 
 
 TRAINING_METHOD = "adaptive"  # "centroid" "adaptive" "iterative"
 LEARNING_RATE = 0.5
 ENCODING_METHOD = GraspHDEventEncoder # xx
-TIME_INTERPOLATION_METHOD = "thermometer"  # "grasp_hd", "event_hd"   encode_temporalpermutation, thermometer
+TIME_INTERPOLATION_METHOD = "event_hd"  # "grasp_hd", "event_hd"   encode_temporalpermutation, thermometer
 
 def main():
     device = "cpu"
@@ -29,7 +28,7 @@ def main():
     max_samples_train = 25
     max_samples_test = 4
     DIMS = 8000
-    K = 10
+    K = 4
     Timewindow = 500000
 
 
@@ -130,8 +129,7 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
         # Encode one sample first
         print("\n[DEBUG] Encoding First Sample")
         events, class_id = dataset[0]
-        encoder.encode_eventhd(events, class_id) #triggers dynamic caching of time HVs
-
+        encoder.encode_eventhd(events, class_id)
         #dynamically created time keys
         eventhd_time_keys = sorted(encoder.time_hvs.keys())  # Only populated keys after encoding!
         print(f"\n[DEBUG] Retrieved {len(eventhd_time_keys)} cached time keys after first encoding.")
@@ -171,35 +169,37 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
             similarity = torchhd.cosine_similarity(T_t1, T_t2).item()
             print(f"Time HV similarity (t={t1} vs. t={t2}): {similarity:.4f}")
 
-    if TIME_INTERPOLATION_METHOD == "linear_interpolation":
-        print("\n[DEBUG] Checking Similarity of Linearly Interpolated Time Hypervectors:")
-        for t in range(0, int(max_time), Timewindow // 5):  # More fine-grained testing
-            T_t1 = encoder.get_time_hv(t)  # Get actual interpolated HV
-            T_t2 = encoder.get_time_hv(t + (Timewindow // 5))  # Get next interpolated HV
-            similarity = torchhd.cosine_similarity(T_t1, T_t2).item()
-            print(f"Time HV similarity (t={t} vs. t={t + (Timewindow // 5)}): {similarity:.4f}")
-
     print("\n[DEBUG] Checking Similarity of Position Hypervectors")
-    for x in range(0, 3*K, K):  # Iterate over grid positions
-        for y in range(0, K+1, K):
-            # Define corners of the current k-window
-            P00 = encoder.get_position_hv(x, y)
-            P01 = encoder.get_position_hv(x, min(y + K, 480 - 1))
-            P10 = encoder.get_position_hv(min(x + K, 640 - 1), y)
-            P11 = encoder.get_position_hv(min(x + K, 640 - 1), min(y + K, 480 - 1))
 
-            # Define a middle point inside the k-window
-            mid_x, mid_y = x + K // 2, y + K // 2
-            P_mid = encoder.get_position_hv(mid_x, mid_y)
+    # Iterate over the first few k-windows
+    for x in range(0, 3 * K, K):
+        for y in range(0, K + 1, K):
+            # Define key points inside the window
+            P00 = encoder.get_position_hv(x, y)  # Top-left corner
+            P01 = encoder.get_position_hv(x, min(y + K, 480 - 1))  # Top-right corner
+            P10 = encoder.get_position_hv(min(x + K, 640 - 1), y)  # Bottom-left corner
+            P11 = encoder.get_position_hv(min(x + K, 640 - 1), min(y + K, 480 - 1))  # Bottom-right
 
-            # Compute similarities within the window
+            # Choose three sample points inside the k-window
+            P_inside_1 = encoder.get_position_hv(x + K // 4, y + K // 4)  # Close to top-left
+            P_inside_2 = encoder.get_position_hv(x + K // 2, y + K // 2)  # Dead center
+            P_inside_3 = encoder.get_position_hv(x + 3 * K // 4, y + 3 * K // 4)  # Close to bottom-right
+
+            # Compute similarities inside the window
             print(f"\n[Window ({x},{y}) - ({x + K},{y + K})]")
             print(f"  P00 vs P01 (Left-Right Corner): {torchhd.cosine_similarity(P00, P01).item():.4f}")
             print(f"  P00 vs P10 (Top-Bottom Corner): {torchhd.cosine_similarity(P00, P10).item():.4f}")
             print(f"  P01 vs P11 (Right Corners): {torchhd.cosine_similarity(P01, P11).item():.4f}")
             print(f"  P10 vs P11 (Bottom Corners): {torchhd.cosine_similarity(P10, P11).item():.4f}")
-            print(f"  P_mid vs P00 (Middle vs Top-Left): {torchhd.cosine_similarity(P_mid, P00).item():.4f}")
-            print(f"  P_mid vs P11 (Middle vs Bottom-Right): {torchhd.cosine_similarity(P_mid, P11).item():.4f}")
+
+            print(f"  P_inside_1 vs P00 (Close to Top-Left): {torchhd.cosine_similarity(P_inside_1, P00).item():.4f}")
+            print(f"  P_inside_2 vs P00 (Center vs Top-Left): {torchhd.cosine_similarity(P_inside_2, P00).item():.4f}")
+            print(
+                f"  P_inside_2 vs P11 (Center vs Bottom-Right): {torchhd.cosine_similarity(P_inside_2, P11).item():.4f}")
+            print(
+                f"  P_inside_3 vs P11 (Close to Bottom-Right): {torchhd.cosine_similarity(P_inside_3, P11).item():.4f}")
+
+
 def plot_pairwise_similarity(encoded_matrix, class_labels):
     fig, ax = plt.subplots(figsize=(10, 8))
     mappable = torchhd.utils.plot_pair_similarity(encoded_matrix, ax=ax)
@@ -252,7 +252,6 @@ def plot_with_parameters(vectors_matrix, class_labels, k, Timewindow, dims, max_
     plt.show()
 
 def plot_tsne(encoded_vectors, class_labels, k, Timewindow, dims, max_samples, encodingmethod):
-    #reduce from 4000D -> 2D
     tsne = TSNE(n_components=2, perplexity=5, random_state=42)
 
     encoded_vectors = np.array(encoded_vectors)  #  list to NumPy array

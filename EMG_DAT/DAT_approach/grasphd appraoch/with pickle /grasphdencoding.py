@@ -11,6 +11,29 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         super().__init__(height, width, dims, time_subwindow, k, device, max_time)
         self.time_hv_cache = {}
 
+    def get_position_hv(self, x, y):
+        """Retrieve or interpolate a hypervector for (x, y)."""
+        # Clamp coordinates to grid bounds
+        x_clamped = min(max(x, 0), self.width)
+        y_clamped = min(max(y, 0), self.height)
+        key = (x_clamped, y_clamped)
+
+        # Check cache first
+        if key in self.position_hvs_cache:
+            return self.position_hvs_cache[key]
+
+        # Check if it's a precomputed corner
+        if (x_clamped in self.x_to_index) and (y_clamped in self.y_to_index):
+            i = self.x_to_index[x_clamped]
+            j = self.y_to_index[y_clamped]
+            hv = self.corner_grid[i, j]
+        else:
+            # Interpolate and cache
+            hv = self._interpolate_hv(x_clamped, y_clamped)
+
+        self.position_hvs_cache[key] = hv
+        return hv
+
     '''
     def encode_grasphd(self, events, class_id):
         """Encodes events using GraspHD method, added subwindow-based accumulation following the paper method: #1 interpolation between anchor TimeHVS"""
@@ -238,7 +261,7 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
 
         H_gesture = None
 
-        # 1: rocess events in time bins
+        # 1: process events in time bins
         for t in range(0, int(self.max_time), int(self.time_subwindow)):
             # Find all unique (x, y) positions in this bin
             active_positions = {(x, y) for e in events if t <= e[0] < t + self.time_subwindow for x, y in
@@ -278,7 +301,18 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
 
 
 
-    def linear_interpolation(self, events, class_id) : ####doesnt make sense, all interpolated vectors will be identical.
+
+
+
+
+
+
+
+
+
+
+    ####doesnt make sense, all interpolated vectors will be identical.
+    def linear_interpolation(self, events, class_id) :
         """Encodes events using EventHD method: binding all spatial encodings per timestamp before binding with time.
         interpolated spatial and temp, linear."""
         print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
