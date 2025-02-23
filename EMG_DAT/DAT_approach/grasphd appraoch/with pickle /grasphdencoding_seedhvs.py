@@ -59,15 +59,20 @@ class GraspHDseedEncoder:
 
 
         elif self.time_interpolation_method == "encode_temporalpermutation":
-            """Uses identity vectors and shifts them based on time."""
+            """Uses identity vectors and shifts them based on time"""
             # We don't store interpolated time HVs, but instead a base identity HV
-            self.time_hvs[0] = torchhd.identity(self.dims, device=self.device)  # Base identity HV
+            self.time_hvs[0] = torchhd.identity(1, self.dims, device=self.device)  # Base identity HV
             print(f"| Using Temporal Permutation Encoding | Base Identity Vector Initialized")
+
+
+
+
 
     def get_time_hv(self, time):
         """Retrieves time hypervector based on selected interpolation method."""
 
         if self.time_interpolation_method == "grasp_hd":
+            """Interpolates between the two closest bins (i.e., T[t] and T[t+1])"""
             bin_index = int((time // self.time_subwindow))  # Ensure integer key
             interpolated_key = bin_index + 0.5
 
@@ -81,12 +86,14 @@ class GraspHDseedEncoder:
                 print(f"[ERROR] Missing Time HV for time={time} (Bin: {bin_index}, Interpolated: {interpolated_key})")
                 return None  # debug
 
-        elif self.time_interpolation_method == "event_hd":  ## Interpolating per actual timestamp
+        elif self.time_interpolation_method == "event_hd":
+            """
+             Interpolating per actual timestamp
+             Dynamically generates a new time HV and caches it"""
             if time in self.time_hvs:
                 return self.time_hvs[time]
             bin_index = (time // self.time_subwindow) * self.time_subwindow
             next_bin = min(bin_index + self.time_subwindow, self.max_time)
-
             if bin_index in self.time_hvs and next_bin in self.time_hvs:
                 proportion_1 = (next_bin - time) / self.time_subwindow  #   % from T[jt] left anchor
                 num_from_T_i = int(proportion_1 * self.dims)
@@ -97,7 +104,6 @@ class GraspHDseedEncoder:
                 ), dim=0)
                 self.time_hvs[time] = interpolated_hv  # Cache for later use
                 return interpolated_hv
-
             if bin_index in self.time_hvs:
                 return self.time_hvs[bin_index]
             elif next_bin in self.time_hvs:
@@ -108,37 +114,10 @@ class GraspHDseedEncoder:
                 return self.time_hvs[closest_key]
 
         elif self.time_interpolation_method == "encode_temporalpermutation":
+            """Shifts an identity HV based on time (no caching)"""
             base_hv = self.time_hvs[0]  # Get identity HV
-            return torchhd.permute(base_hv, time % self.time_subwindow)  # Shift based on time
+            return torchhd.permute(base_hv, shifts= int(time % self.time_subwindow))  # Shift based on time
 
-        elif self.time_interpolation_method == "linear_interpolation":
-            if len(self.time_hvs) == 0:
-                raise ValueError(
-                    "[ERROR] No time hypervectors found! Ensure _generate_time_hvs() is called before encoding.")
-
-            if time in self.time_hvs:
-                return self.time_hvs[time]
-
-            bin_index = (time // self.time_subwindow) * self.time_subwindow
-            next_bin = min(bin_index + self.time_subwindow, self.max_time)
-
-            if bin_index in self.time_hvs and next_bin in self.time_hvs:
-                proportion = ((time - bin_index) / self.time_subwindow) ** 1.5  # Exponential weighting
-                interpolated_hv = (1 - proportion) * self.time_hvs[bin_index] + proportion * self.time_hvs[next_bin]
-                self.time_hvs[time] = interpolated_hv  # Cache for future
-                return interpolated_hv
-
-            if bin_index in self.time_hvs:
-                return self.time_hvs[bin_index]
-            elif next_bin in self.time_hvs:
-                return self.time_hvs[next_bin]
-            else:
-                if len(self.time_hvs) == 0:
-                    raise ValueError("[ERROR] No time hypervectors initialized!")
-
-                closest_key = min(self.time_hvs.keys(), key=lambda k: abs(k - time))
-                print(f"[WARNING] Requested time {time} not found! Using closest available: {closest_key}")
-                return self.time_hvs[closest_key]
         elif self.time_interpolation_method in [ "thermometer" , "permutation"]:
             return self.time_continious(time)
     def time_continious(self, time):
@@ -153,12 +132,10 @@ class GraspHDseedEncoder:
             thermometer_hv[:level] = 1  # activate increasing levels
             return thermometer_hv
 
-
-
         elif self.time_interpolation_method == "permutation":
             """Shifts the identity time vector based on time"""
             base_hv = self.time_hvs[0]  # Get identity HV
-            return torchhd.permute(base_hv, time % self.time_subwindow)  # Shift based on time
+            return torchhd.permute(base_hv, shifts=int(time % self.time_subwindow))  # Shift based on time
 
         else:  # Fallback to original
             return super().get_time_hv(time)

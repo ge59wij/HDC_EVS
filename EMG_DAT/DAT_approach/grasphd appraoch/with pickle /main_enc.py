@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.manifold import TSNE
 import numpy as np
+import time
+
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
 
@@ -19,20 +21,24 @@ np.set_printoptions(suppress=True, precision=8)
 TRAINING_METHOD = "adaptive"  # "centroid" "adaptive" "iterative"
 LEARNING_RATE = 0.5
 ENCODING_METHOD = GraspHDEventEncoder # xx
-TIME_INTERPOLATION_METHOD = "event_hd"  # "grasp_hd", "event_hd"   encode_temporalpermutation, thermometer
+
+
+
+TIME_INTERPOLATION_METHOD = "encode_temporalpermutation"  # "grasp_hd", "event_hd"   encode_temporalpermutation, thermometer, permutation
 
 def main():
     device = "cpu"
     print(f"Using device: {device}")
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
-    max_samples_train = 25
+    max_samples_train = 23
     max_samples_test = 4
-    DIMS = 8000
-    K = 4
-    Timewindow = 500000
+    DIMS = 6000
+    K = 100
+    Timewindow = 100000
+    Train_split ="picked_samples"
+    save = True
 
-
-    dataset_train = load_pickle_dataset(dataset_path, split="train", max_samples=max_samples_train)
+    dataset_train = load_pickle_dataset(dataset_path, split=Train_split, max_samples=max_samples_train)
     dataset_test = load_pickle_dataset(dataset_path, split="test", max_samples=max_samples_test)
 
     max_time_train = get_max_time(dataset_train)
@@ -52,12 +58,11 @@ def main():
     '''
 
 
-    encoder = ENCODING_METHOD(height=480, width=640, dims=DIMS, time_subwindow=Timewindow, k=K, device=device,
-                              max_time= max_time, time_method= TIME_INTERPOLATION_METHOD)
+    encoder = ENCODING_METHOD(height=480, width=640, dims=DIMS, time_subwindow=Timewindow, k=K, device=device, max_time= max_time, time_method= TIME_INTERPOLATION_METHOD)
 
     print_debug(TIME_INTERPOLATION_METHOD, dataset_train, encoder, max_time, Timewindow, K)
-
     encoded_vectors, class_labels = [], []
+    encoding_start_time = time.time()
 
     for sample_id, (events, class_id) in tqdm(enumerate(dataset_train), total=len(dataset_train),
                                               desc="Encoding Train Samples"):
@@ -65,19 +70,32 @@ def main():
             encoded_sample = encoder.encode_eventhd(events, class_id)
         elif TIME_INTERPOLATION_METHOD == "grasp_hd":
             encoded_sample = encoder.encode_grasphd(events, class_id)
-        elif TIME_INTERPOLATION_METHOD == "linear_interpolation":
-            encoded_sample = encoder.linear_interpolation(events, class_id)
         elif TIME_INTERPOLATION_METHOD == "encode_temporalpermutation":
             encoded_sample = encoder.encode_temporalpermutation(events, class_id)
-        elif TIME_INTERPOLATION_METHOD in [ "thermometer", "permutatin"]:
+        elif TIME_INTERPOLATION_METHOD in [ "thermometer", "permutation"]:
             encoded_sample = encoder.encode_accumulation(events, class_id)
-
 
         encoded_vectors.append(encoded_sample)
         class_labels.append(class_id)
 
+    encoding_end_time = time.time()
+    encoding_duration = round(encoding_end_time - encoding_start_time, 2)
+
     encoded_matrix = torch.stack(encoded_vectors)
     print(f"Encoded Matrix Stats - Min: {encoded_matrix.min()}, Max: {encoded_matrix.max()}")
+
+    if save:
+        run_folder = create_unique_run_folder()
+        params = {
+            "k": K, "Timewindow": Timewindow, "DIMS": DIMS, "max_samples_train": max_samples_train,
+            "max_samples_test": max_samples_test, "Train_split": Train_split, "max_time": max_time,
+            "encoding_method": TIME_INTERPOLATION_METHOD, "encoding_time (s)": encoding_duration
+        }
+        save_hyperparameters(run_folder, params)
+        save_pickle_file(run_folder, "encoded_matrix.pkl",
+                         {"encoded_matrix": encoded_matrix.cpu(), "class_labels": class_labels})
+    else:
+        run_folder = None
 
     #---------------------------Training--------------
     '''
@@ -115,18 +133,17 @@ def main():
           f"L= {LEARNING_RATE} on {TRAINING_METHOD}\n {max_samples_train} trainsamples, {max_samples_test} testsmaples.")
     print(f"Testing Accuracy: {(accuracy.compute().item() * 100):.3f}%")
     #plot_with_parameters(encoded_test_matrix, test_labels, K ,Timewindow, DIMS ,max_samples_train, ENCODING_METHOD)
-    
-    
+
     '''
-    plot_with_parameters(encoded_matrix, class_labels, K ,Timewindow, DIMS ,max_samples_train, TIME_INTERPOLATION_METHOD)
-    plot_tsne(encoded_vectors, class_labels,K ,Timewindow, DIMS ,max_samples_train, TIME_INTERPOLATION_METHOD )
 
-
+    plot_with_parameters(encoded_matrix, class_labels, K, Timewindow, DIMS, max_samples_train,
+                         TIME_INTERPOLATION_METHOD, save, run_folder)
+    plot_tsne(encoded_vectors, class_labels, K, Timewindow, DIMS, max_samples_train,
+              TIME_INTERPOLATION_METHOD, save, run_folder)
 
 def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindow, K):
 
     if TIME_INTERPOLATION_METHOD == "weighted_time":
-        # Encode one sample first
         print("\n[DEBUG] Encoding First Sample")
         events, class_id = dataset[0]
         encoder.encode_eventhd(events, class_id)
@@ -135,7 +152,6 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
         print(f"\n[DEBUG] Retrieved {len(eventhd_time_keys)} cached time keys after first encoding.")
         # Sampled checks: First 5 consecutive timestamps, then compare across different bins
         sample_indices = list(range(5)) + [len(eventhd_time_keys) // 2, len(eventhd_time_keys) - 1]
-
         print("\n[DEBUG] Sampling Time Hypervector Similarities Across Different Bins:")
         for i in sample_indices[:-1]:
             t1, t2 = eventhd_time_keys[i], eventhd_time_keys[i + 1]  # Compare adjacent timestamps
@@ -143,7 +159,6 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
             T_t2 = encoder.get_time_hv(t2)
             similarity = torchhd.cosine_similarity(T_t1, T_t2).item()
             print(f"Time HV similarity (t={t1} vs. t={t2}): {similarity:.4f}")
-
         # Compare across larger bin differences
         print("\n[DEBUG] Comparing Across Distant Time Bins:")
         distant_pairs = [
@@ -198,23 +213,38 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
                 f"  P_inside_2 vs P11 (Center vs Bottom-Right): {torchhd.cosine_similarity(P_inside_2, P11).item():.4f}")
             print(
                 f"  P_inside_3 vs P11 (Close to Bottom-Right): {torchhd.cosine_similarity(P_inside_3, P11).item():.4f}")
+def create_unique_run_folder(base_path="/space/chair-nas/tosy/test_run/"):
+    """next available run folder."""
+    os.makedirs(base_path, exist_ok=True)
+    existing_runs = sorted([d for d in os.listdir(base_path) if d.startswith("run_")])
+    if existing_runs:
+        last_run = max([int(d.split("_")[1]) for d in existing_runs])
+        new_run = last_run + 1
+    else:
+        new_run = 1
+    run_folder = os.path.join(base_path, f"run_{new_run:03d}")
+    os.makedirs(run_folder)
+    print(f" [INFO] Run folder created at: {run_folder}")
+    return run_folder
+def save_hyperparameters(run_folder, params):
+    param_file = os.path.join(run_folder, "params.txt")
+    with open(param_file, "w") as f:
+        for key, value in params.items():
+            f.write(f"{key}: {value}\n")
+    print(f"[SAVED] Hyperparameters saved to: {param_file}")
+def save_pickle_file(run_folder, filename, data):
+    """Saves dictionary to a pickle file"""
+    with open(os.path.join(run_folder, filename), "wb") as f:
+        pickle.dump(data, f)
+        print(f" [SAVED] {filename} file saved")
 
 
-def plot_pairwise_similarity(encoded_matrix, class_labels):
-    fig, ax = plt.subplots(figsize=(10, 8))
-    mappable = torchhd.utils.plot_pair_similarity(encoded_matrix, ax=ax)
-    plt.colorbar(mappable, ax=ax)
-    num_samples = encoded_matrix.shape[0]
-    tick_positions = np.arange(num_samples)
-    class_labels_str = [str(label) for label in class_labels]  # Convert labels to strings
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(class_labels_str, rotation=90)
-    ax.set_yticks(tick_positions)
-    ax.set_yticklabels(class_labels_str)
-    ax.set_xlabel("Class ID")
-    ax.set_ylabel("Class ID")
-    ax.set_title("Pairwise Cosine Similarity of Encoded Samples")
+def save_plot(run_folder, filename):
+    plt.gcf().canvas.draw()
+    plt.savefig(os.path.join(run_folder, filename), bbox_inches="tight")
+    print(f" [SAVED] Plot saved: {filename}")
     plt.show()
+    plt.close()
 def train_model(encoded_matrix, label_tensor, dims, num_classes, method):
     model = Centroid(dims, num_classes)
     with torch.no_grad():
@@ -231,48 +261,66 @@ def train_model(encoded_matrix, label_tensor, dims, num_classes, method):
             raise ValueError("Invalid training method. Choose from 'centroid', 'adaptive', or 'iterative'.")
     model.normalize()
     return model
-def plot_with_parameters(vectors_matrix, class_labels, k, Timewindow, dims, max_samples, encodingmethod):
+def plot_with_parameters(vectors_matrix, class_labels, k, Timewindow, dims, max_samples, encodingmethod, save,
+                         run_folder=None):
+    class_labels_tensor = torch.tensor(class_labels)
+    sorted_indices = torch.argsort(class_labels_tensor)
 
-    similarity_matrix = torchhd.functional.cosine_similarity(vectors_matrix, vectors_matrix).cpu().numpy()
-    plt.figure(figsize=(10, 8))
+    # Sort vectors and class labels
+    sorted_vectors_matrix = vectors_matrix[sorted_indices]
+    sorted_class_labels = class_labels_tensor[sorted_indices].tolist()
+
+    # Ensure labels are adjacent in the heatmap
+    unique_classes = sorted(set(sorted_class_labels))
+    class_to_index = {cls: i for i, cls in enumerate(unique_classes)}
+    sorted_class_indices = [class_to_index[cls] for cls in sorted_class_labels]
+
+    similarity_matrix = torchhd.functional.cosine_similarity(sorted_vectors_matrix, sorted_vectors_matrix).cpu().numpy()
+
+    if save and run_folder:
+        save_pickle_file(run_folder, "similarity_matrix.pkl", {"similarity_matrix": similarity_matrix})
+
+    plt.figure(figsize=(12, 10))  # Increase figure size
     sns.heatmap(
-        similarity_matrix,
-        annot=True,
-        fmt=".2f",
-        cmap="coolwarm",
-        xticklabels=class_labels,
-        yticklabels=class_labels,
-        cbar=True,
-        square=True,
-        linewidths=0.5
-    )
-    plt.title(f"Cosine Similarity {encodingmethod} Heatmap (k={k}| dims={dims}| timewindow={Timewindow}| samples={max_samples})")
+        similarity_matrix, annot=True, fmt=".2f", cmap="coolwarm",
+        xticklabels=sorted_class_indices, yticklabels=sorted_class_indices,
+        cbar=True, square=True, linewidths=0.5, annot_kws={"size": 7} )
+
+    plt.title(f"Cosine Similarity {encodingmethod} (k={k} | dims={dims} | timewindow={Timewindow} | samples={max_samples})")
     plt.xlabel("Sample Index (Class ID)")
     plt.ylabel("Sample Index (Class ID)")
+
+    if save and run_folder:
+        save_plot(run_folder, "similarity_heatmap.png")
+
     plt.show()
 
-def plot_tsne(encoded_vectors, class_labels, k, Timewindow, dims, max_samples, encodingmethod):
+
+def plot_tsne(encoded_vectors, class_labels, k, Timewindow, dims, max_samples, encodingmethod, save, run_folder):
     tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-
-    encoded_vectors = np.array(encoded_vectors)  #  list to NumPy array
+    encoded_vectors = np.array(encoded_vectors)  # Convert list to NumPy array
     reduced_vectors = tsne.fit_transform(encoded_vectors)
-    palette = {0: "red", 1: "blue", 2: "green"}
 
-    # Scatter plot with fixed colors
     plt.figure(figsize=(8, 6))
-    for class_id in np.unique(class_labels):
-        plt.scatter(reduced_vectors[np.array(class_labels) == class_id, 0],
-                    reduced_vectors[np.array(class_labels) == class_id, 1],
-                    label=f"Class {class_id}",
-                    color=palette[class_id], alpha=0.7, edgecolors='k')
+    unique_classes = np.unique(class_labels)
+    colors = ["red", "blue", "green", "purple", "orange"]
+    palette = {cls: colors[i % len(colors)] for i, cls in enumerate(unique_classes)}
 
-    # Plot settings
+    for class_id in unique_classes:
+        plt.scatter(
+            reduced_vectors[np.array(class_labels) == class_id, 0],
+            reduced_vectors[np.array(class_labels) == class_id, 1],
+            label=f"Class {class_id}",
+            color=palette[class_id], alpha=0.7, edgecolors='k'
+        )
+
     plt.xlabel("t-SNE Component 1")
     plt.ylabel("t-SNE Component 2")
-    plt.title(f"t-SNE Visualization, {encodingmethod} Heatmap (k={k}| dims={dims}| timewindow={Timewindow}| samples={max_samples})")
+    plt.title(f"t-SNE Visualization (k={k} | dims={dims} | timewindow={Timewindow} | samples={max_samples})")
     plt.legend()
+    if save and run_folder:
+        save_plot(run_folder, "tsne_plot.png")
     plt.show()
-
 def load_pickle_dataset(dataset_path, split, max_samples):
     """
     Returns List[Tuple]: A list of tuples (events, class_id), where events are the event tuples (t, (x, y), p).

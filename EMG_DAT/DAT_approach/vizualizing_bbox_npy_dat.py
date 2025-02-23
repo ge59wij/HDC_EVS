@@ -5,9 +5,9 @@ from matplotlib.animation import FuncAnimation
 from metavision_core.event_io import EventsIterator
 
 # Paths
-base_path = "/space/chair-nas/tosy/Gen3_Chifoumi_DAT/val/"
-file_name = "scissors_left_close_fast_sitting_recording_019_2021-09-14_15-03-14"
-dat_file_path = os.path.join(base_path, file_name + "_cd.dat")  # Could also be "_td.dat"
+base_path = "/space/chair-nas/tosy/Gen3_Chifoumi_DAT/test/"
+file_name = "rock_200212_135956_0_0"
+dat_file_path = os.path.join(base_path, file_name + "_td.dat")  # Could also be "_td.dat"
 bbox_file_path = os.path.join(base_path, file_name + "_bbox.npy")
 
 # Load bounding box for filtering

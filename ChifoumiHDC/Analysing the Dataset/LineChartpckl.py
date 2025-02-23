@@ -5,10 +5,10 @@ import matplotlib.cm as cm
 import numpy as np
 import random
 
-dataset_folder = "/space/chair-nas/tosy/preprocessed_dat_chifoumi/val/scissors_left_close_fast_standing_recording_015_2021-09-14_14-38-43_cd.dat.pkl"
-gesture_class = 2
+dataset_folder = "/space/chair-nas/tosy/preprocessed_dat_chifoumi/val/"
+gesture_class = 1
 num_samples = 30
-skip_first_n = 20
+skip_first_n = 8
 sort_by_duration = True
 bin_size = 10000  # (10000=10ms)
 

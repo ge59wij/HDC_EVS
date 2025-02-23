@@ -6,7 +6,7 @@ from tqdm import tqdm
 from metavision_core.event_io import EventsIterator
 
 DATASET_PATH = "/space/chair-nas/tosy/Gen3_Chifoumi_DAT"
-SAVE_DIR = "/space/chair-nas/tosy/preprocessed_dat_chifoumi/"
+SAVE_DIR = "/space/chair-nas/tosy/preprocessed_dat_chifoumi/train2/"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 SPLITS = ["train"]

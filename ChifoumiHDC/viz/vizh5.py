@@ -1,5 +1,5 @@
 import h5py
-
+'''
 #.h5 file
 h5_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/paper_left_close_fast_sitting_recording_013_2021-09-14_14-18-22.h5"
 
@@ -24,6 +24,10 @@ print("sep")
 with h5py.File("/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/paper_left_close_fast_sitting_recording_013_2021-09-14_14-18-22.h5", "r") as f:
     # List all datasets in the file
     print("Datasets:", list(f.keys()))
+    
+    
+    
+    
 
     # Access the dataset
     data = f["data"]
@@ -81,4 +85,27 @@ with h5py.File(h5_path2, "r") as h5_file:
     for key, val in dataset.attrs.items():
         print(key,val)
 
+'''
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
 
+# Path to the HDF5 file
+h5_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/paper_left_close_fast_sitting_recording_013_2021-09-14_14-18-22.h5"
+h5_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/scissors_right_close_fast_sitting_recording_003_2021-09-14_11-14-38.h5"
+
+# Open the HDF5 file and read the dataset
+with h5py.File(h5_path, "r") as f:
+    data = f["data"]  # Assuming 'data' is the dataset key
+    num_frames = data.shape[0]  # Total number of time steps
+
+    print(f"Dataset Shape: {data.shape}")  # (time, channel, height, width)
+
+    # Loop through all frames and plot them
+    for i in range(num_frames):
+        frame = data[i, 0]  # Extracting the first channel
+
+        plt.imshow(frame, cmap="gray")
+        plt.title(f"Frame {i} - Channel 0")
+        plt.axis("off")
+        plt.show()
