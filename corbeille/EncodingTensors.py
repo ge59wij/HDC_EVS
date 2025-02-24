@@ -6,7 +6,7 @@ from torchhd.embeddings import Random
 from torchhd.models import Centroid
 import torchmetrics
 from tqdm import tqdm
-from Chifoumi_to_Pytensors import EventDatasetLoader, print_summary_table
+from corbeille.Chifoumi_to_Pytensors import EventDatasetLoader, print_summary_table
 
 
 DIMENSIONS = 8000

@@ -1,7 +1,7 @@
 import numpy as np
 
-data = np.load("/space/chair-nas/tosy/Gen3_Chifoumi_DAT/train/scissor_200212_095343_0_0_bbox.npy")
-npy_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/val/rock_left_close_slow_sitting_recording_024_2021-09-14_15-33-49_bbox.npy"
+data = np.load("/space/chair-nas/tosy/H5_Custom_HistoChifoumi/val/paper_200206_180138_0_0_bbox.npy")
+npy_path = "//space/chair-nas/tosy/H5_Custom_HistoChifoumi/val/paper_200206_180138_0_0_bbox.npy"
 #data3= np.load("//space/chair-nas/tosy/Gen3_Chifoumi_DAT/train/scissor_200212_093346_0_0_bbox.npy")
 
 print(npy_path)

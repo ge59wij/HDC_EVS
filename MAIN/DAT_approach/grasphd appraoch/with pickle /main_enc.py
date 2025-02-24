@@ -24,17 +24,17 @@ ENCODING_METHOD = GraspHDEventEncoder # xx
 
 
 
-TIME_INTERPOLATION_METHOD = "encode_temporalpermutation"  # "grasp_hd", "event_hd"   encode_temporalpermutation, thermometer, permutation
+TIME_INTERPOLATION_METHOD = "encode_temporalper"  # "grasp_hd", "event_hd" , encode_temporalpermutation, thermometer, permutation,encode_temporalpermutation_weight
 
 def main():
     device = "cpu"
     print(f"Using device: {device}")
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
-    max_samples_train = 23
+    max_samples_train = 72
     max_samples_test = 4
     DIMS = 6000
     K = 100
-    Timewindow = 100000
+    Timewindow = 50_000
     Train_split ="picked_samples"
     save = True
 
@@ -72,6 +72,8 @@ def main():
             encoded_sample = encoder.encode_grasphd(events, class_id)
         elif TIME_INTERPOLATION_METHOD == "encode_temporalpermutation":
             encoded_sample = encoder.encode_temporalpermutation(events, class_id)
+        elif TIME_INTERPOLATION_METHOD == "encode_accumulation_weight":
+            encoded_sample = encoder.encode_accumulation_weight(events, class_id)
         elif TIME_INTERPOLATION_METHOD in [ "thermometer", "permutation"]:
             encoded_sample = encoder.encode_accumulation(events, class_id)
 

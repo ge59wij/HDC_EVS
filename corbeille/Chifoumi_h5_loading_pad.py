@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 '''
 Chifoumi_h5_loading_pad.py:
+
 Input: h5 + npy files for labels
 HDataset: Reads each [T, 2, 120, 160] into a float tensor, reads the label as an integer from 5th npy array. 
 Returns (tensor, label).
@@ -31,8 +32,20 @@ Collate pads 0s depending on batch size, it takes biggest T in that batch. neede
             batch_labels      =>  tensor([0, 1, 2, 2, 0, 0, 0, 2])  here each el corresponds to a class id
 ###########################
 Next: feed (padded_batch, labels) to hdc encoder.
+
+--delta-t 10000               Each time bin (T) represents 10,000 microseconds (10ms) of event accumulation.
+--preprocess histo_quantized 
+--neg_bit_len_quantized 4     The data uses 8-bit quantization, with 4 bits for negative events (off-polarity).
+--total_bit_len_quantized 8   
+--normalization_quantized     Normalization was applied to scale event counts.
+                             Most likely dividing by a max event count (e.g., 2^8 = 256 or 2^4 = 16 for neg-bit length).
+--num-workers 32  
+--height_width 120 160
+
+
 ###########################
 '''
+
 
 class EventDatasetLoader(Dataset):
     def __init__(self, root_dir, split):
@@ -47,6 +60,7 @@ class EventDatasetLoader(Dataset):
         json_path = os.path.join(self.root_dir, "label_map_dictionary.json")
         with open(json_path, "r") as f:
             return {str(k): v for k, v in json.load(f).items()}
+
     def _get_file_pairs(self):
         pairs = []
         for h5_file in self.h5_files:
@@ -54,8 +68,10 @@ class EventDatasetLoader(Dataset):
             if os.path.exists(npy_file):
                 pairs.append((h5_file, npy_file))
         return pairs
+
     def __len__(self):
         return len(self.file_pairs)
+
     def __getitem__(self, idx):
         """
         Returns:
@@ -74,6 +90,8 @@ class EventDatasetLoader(Dataset):
         bbox_data = np.load(npy_path, allow_pickle=True)
         class_id = int(bbox_data[0][5])
         return tensor_data, class_id
+
+
 def collate_fn(batch):
     """
     batch: List of (sequence_tensor, class_id).
@@ -87,7 +105,7 @@ def collate_fn(batch):
     # 1) Find max sequence length T in this batch
     lengths = [seq.shape[0] for seq in sequences]
     max_length = max(lengths)
-    # 2) Pad each sequence to max_length along the time dimension
+    # 2) Pad each sequence to max_length along the time dimension with -2
     padded_sequences = []
     for seq in sequences:
         t = seq.shape[0]
@@ -96,7 +114,7 @@ def collate_fn(batch):
         # In F.pad, specify padding in reverse order:
         # (W_left, W_right, H_left, H_right, C_left, C_right, T_left, T_right)
         # We only want to pad time dimension (T), so:
-        padded_seq = F.pad(seq, (0, 0, 0, 0, 0, 0, 0, pad_amount), mode='constant', value=0)
+        padded_seq = F.pad(seq, (0, 0, 0, 0, 0, 0, 0, pad_amount), mode='constant', value=-2)
         padded_sequences.append(padded_seq)
     # 3) Stack padded sequences => shape [B, max_T, 2, 120, 160]
     batch_tensor = torch.stack(padded_sequences, dim=0)
@@ -104,9 +122,9 @@ def collate_fn(batch):
     label_tensor = torch.tensor(labels, dtype=torch.long)
     return batch_tensor, label_tensor
 
+
 if __name__ == "__main__":
     root_dir = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized"
-    #root_dir = "/space/chair-nas/tosy/customdownsampled"
     split = "train"
     dataset = EventDatasetLoader(root_dir=root_dir, split=split)
     dataloader = DataLoader(dataset, batch_size=6, shuffle=True, collate_fn=collate_fn, num_workers=4)
@@ -117,16 +135,49 @@ if __name__ == "__main__":
     print("Numeric label (class_id):", sample_label)  # e.g., 0
     print("String label (class_label):", sample_label_str)  # e.g., "rock"
     '''
-
     sample_data, sample_label = dataset[1500]
-    print("Shape of sample_data:", sample_data.shape)  # e.g., [T, 2, 120, 160]
-    print("Label (class_id):", sample_label)
 
-#Mean is the average value of all event counts in that sample
+
+    with h5py.File("/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/rock_200211_105303_0_0.h5", "r") as f:
+
+        print("HDF5 Attributes:")
+        for key, value in f.attrs.items():
+            print(f"{key}: {value}")
+
+        print("\nDataset Keys:", list(f.keys()))  # Lists all datasets in the file
+        if 'data' in f:
+            print("Data y shape:", f['data'].shape)
+    sample1, _ = dataset[0]  # First sample
+    sample2, _ = dataset[10]  # Another sample
+    sample3, _ = dataset[100]  # Yet another sample
+    print("Before unnormalization (normalized):", sample_data[:, 0, 60, 80])  # Polarity 0 at (60,80)
+    unnormalized_sample = sample_data * sample_data.max().item()
+    print("After unnormalization:", unnormalized_sample[:, 0, 60, 80])
+
+    print("Max event count in sample 1:", sample1.max().item())
+    print("Max event count in sample 2:", sample2.max().item())
+    print("Max event count in sample 3:", sample3.max().item())
+
+    print("Shape of x sample_data:", sample_data.shape)  # e.g., [T, 2, 120, 160]
+    print("Label (class_id):", sample_label)
+    print(sample_data[7])
+    pixel_x, pixel_y = 60, 80  # Choose a random pixel
+    print(sample_data[:, 0, pixel_x, pixel_y])  # Events at (60,80) for polarity 0 (off)
+    print(sample_data[:, 1, pixel_x, pixel_y])  # Events at (60,80) for polarity 1 (on)
+    for t in range(sample_data.shape[0]):
+        print(f"T={t} | Min: {sample_data[t].min().item()}, Max: {sample_data[t].max().item()}")
+    #Mean is the average value of all event counts in that sample
 #Max is the highest event count in a single !pixel! for any time bin/polarity.
 #Min is the lowest event count 
 
-    print("Data mean:", sample_data.mean().item())
+    mean_over_time = sample_data.mean(dim=0)  # Shape: [2, 120, 160]
+    print("Mean over time shape:", mean_over_time.shape)  # Expect [2, 120, 160]
+    print("Mean over time (example pixel at 60,80):", mean_over_time[:, 60, 80])
+    mean_event_count_per_timestep = sample_data.sum(dim=[2, 3]).mean(dim=0)  # Shape: [2]
+    print("Mean event count per time step (on/off):", mean_event_count_per_timestep)
+    print("Max event count:", sample_data.max().item())  # Should be ~1.0 if fully normalized
+    print("Min event count:", sample_data.min().item())  # Should be 0.0 if background
+
     print("Data max:", sample_data.max().item())
     print("Data min:", sample_data.min().item())
 

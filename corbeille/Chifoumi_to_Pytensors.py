@@ -14,7 +14,7 @@ class EventDatasetLoader(Dataset):
     def __init__(self,
                  root_dir: str,
                  split: str,
-                 max_time: int = 150,
+                 max_time: int = 150,  ###########
                  transform=None) -> None:
         self.root_dir = root_dir
         self.split_dir = os.path.join(root_dir, split)

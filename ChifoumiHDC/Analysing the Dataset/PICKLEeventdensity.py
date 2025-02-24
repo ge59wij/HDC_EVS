@@ -1,3 +1,11 @@
+'''
+Prints the top N files with:
+The least number of events.
+The most number of events.
+Filters by gesture class (if specified)
+'''
+
+
 import os
 import pickle
 import numpy as np

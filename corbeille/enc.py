@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 import torchhd
-
+import torchhd
 #grasphd
 class GestureHDEventEncoder:
     def __init__(self, height, width, max_time, dims, device):
@@ -11,13 +11,11 @@ class GestureHDEventEncoder:
         self.dims = dims
         self.device = device
         # Seed hypervectors for pixel positions: shape [height, width, dims]
-        self.P = torch.randint(0, 2, (height, width, dims), device=self.device, dtype=torch.int8).float()
-        self.P[self.P == 0] = -1  # bipolar
-        # Seed hypervectors for polarity: shape [2, dims]
-        self.I = torch.randint(0, 2, (2, dims), device=self.device, dtype=torch.int8).float()
+        self.P = torchhd.random(1,self.dims, "MAP")
+        self.I =  torchhd.random(1,self.dims, "MAP")
         self.I[self.I == 0] = -1
-        self.T0 = torch.randint(0, 2, (dims,), device=self.device, dtype=torch.int8).float()
-        self.T0[self.T0 == 0] = -1
+
+        self.T0 =  torchhd.random(1,self.dims, "MAP")
     def _permute_time(self, t):
         # Simple permutation: circular shift by t positions
         return torch.roll(self.T0, shifts=t, dims=0)

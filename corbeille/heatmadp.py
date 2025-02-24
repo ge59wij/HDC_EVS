@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
-from DAT_loadergrasp import GRASP_DAT_EventLoader
+from corbeille.DAT_loadergrasp import GRASP_DAT_EventLoader
 from grasphdencoding import GraspHDEventEncoder
 import torch
 from tqdm import tqdm

@@ -1,6 +1,6 @@
 import re
 
-# extract and reformat valid file paths
+# extract and reformat valid file paths when i was making the picked samples from pkl.
 def extract_paths(input_file, output_file):
     valid_paths = []
 

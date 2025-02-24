@@ -1,13 +1,11 @@
 import torch
 import torchhd
 import math
-
+'''   
 def generate_time_hvs_correlated(max_time, dims, chunk_size=20):
     # Number of chunks
     n_chunks = math.ceil(max_time / chunk_size) + 1
-    # Random HVs for each chunk boundary
     boundary_hvs = [torchhd.random(1, dims, "MAP")[0] for _ in range(n_chunks)]
-    # boundary_hvs[i] is the HV for time i*chunk_size
     time_hvs = []
     for t in range(max_time):
         # Figure out which chunk boundaries we are between
@@ -41,21 +39,10 @@ def generate_time_hvs_correlated(max_time, dims, chunk_size=20):
 
 def generate_position_hvs(height, width, dims):
     """
-    Generate a random hypervector for each pixel position (x,y).
-    For simplicity, each (x,y) gets a unique random HV.
+    Generate a random hypervector for each pixel position (x,y). uhm no
     """
     pos_hvs = torchhd.random(height * width, dims, "MAP")
     return pos_hvs  # Shape [height * width, dims]
-
-
-def generate_polarity_hvs(dims):
-    """
-    2 polarities: ON, OFF. We'll just do random HV for ON, and use its negative for OFF.
-    """
-    hv_on = torchhd.random(1, dims, "MAP")[0]
-    hv_off = -hv_on  # Or torchhd.random_hv(1, dims, bipolar=True)[0]
-    return hv_on, hv_off
-
 
 class GraspHDEventEncoder:
     """
@@ -70,7 +57,8 @@ class GraspHDEventEncoder:
         self.device = torch.device(device)
 
         # 1) Polarity HVs
-        self.hv_on, self.hv_off = generate_polarity_hvs(dims)
+        self.I = torchhd.random(1, self.dims, "MAP")
+        self.Ioff = - self.I
         # 2) Position HVs
         self.pos_hvs = generate_position_hvs(height, width, dims).to(self.device)
         # 3) Time HVs (correlated)
@@ -99,26 +87,26 @@ class GraspHDEventEncoder:
             pos_hvs_reshaped = self.pos_hvs.view(self.height, self.width, self.dims)
 
             # Compute HV contributions from ON and OFF events
-            hv_on = (slice_on.unsqueeze(-1) * pos_hvs_reshaped) * self.hv_on.to(self.device)
-            hv_off = (slice_off.unsqueeze(-1) * pos_hvs_reshaped) * self.hv_off.to(self.device)
+            hv_on = (slice_on.unsqueeze(-1) * pos_hvs_reshaped) * self.I.to(self.device)
+            hv_off = (slice_off.unsqueeze(-1) * pos_hvs_reshaped) * self.Ioff.to(self.device)
 
             # Sum over spatial dimensions
-            spatial_hv_t = hv_on.sum(dim=(0, 1)) + hv_off.sum(dim=(0, 1))
+            self.spatial_hv_t = torchhd.bundle(##)
 
             # Bind with time HV
             hv_time = self.time_hvs[t]
-            hv_t = spatial_hv_t * hv_time  # Elementwise multiply => binding
+            hv_t = torchhd.bind(spatial_hv_t, hv_time)
 
             # Accumulate temporal contributions
             final_hv += hv_t
 
         # (Optional) binarize final HV
-        final_hv = torch.sign(final_hv)
+        final_hv = torchhd.normalize(final_hv)
         return final_hv
 
 
 
-'''
+
 if __name__ == "__main__":
     # Quick test
     encoder = GraspHDEventEncoder(

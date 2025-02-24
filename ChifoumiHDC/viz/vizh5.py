@@ -92,7 +92,7 @@ import numpy as np
 
 # Path to the HDF5 file
 h5_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/paper_left_close_fast_sitting_recording_013_2021-09-14_14-18-22.h5"
-h5_path = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/scissors_right_close_fast_sitting_recording_003_2021-09-14_11-14-38.h5"
+h5_path = "/space/chair-nas/tosy/testh5/rock_left_far_fast_standing_recording_005_2021-09-14_11-26-11.h5"
 
 # Open the HDF5 file and read the dataset
 with h5py.File(h5_path, "r") as f:
@@ -105,7 +105,7 @@ with h5py.File(h5_path, "r") as f:
     for i in range(num_frames):
         frame = data[i, 0]  # Extracting the first channel
 
-        plt.imshow(frame, cmap="gray")
+        plt.imshow(frame, cmap="hot")
         plt.title(f"Frame {i} - Channel 0")
         plt.axis("off")
         plt.show()

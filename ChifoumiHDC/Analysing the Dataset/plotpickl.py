@@ -2,6 +2,11 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+'''
+plot pickle files, 10ms, check for empty bins, noisy no gesture bins. 
+Check linechart.
+/space/chair-nas/tosy/preprocessed_dat_chifoumi/picked_samples/
+'''
 
 file_path = input("file path: ")
 with open(file_path, "rb") as f:
