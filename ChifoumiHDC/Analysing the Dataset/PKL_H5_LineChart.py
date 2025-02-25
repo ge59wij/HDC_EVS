@@ -6,14 +6,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 DATASET_TYPE = "h5"  # "h5" or "pkl"
-SPLIT = "train"
+SPLIT = "val"
 DATASET_FOLDER = f"/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/{SPLIT}" \
     if DATASET_TYPE == "h5" else f"/space/chair-nas/tosy/preprocessed_dat_chifoumi/{SPLIT}"
-GESTURE_CLASS = None  #None for all 0 1 2
-NUM_SAMPLES = 1000
+GESTURE_CLASS = 0  #None for all 0 1 2
+NUM_SAMPLES = 30
 SORT_BY_DURATION = True  # Shortest to longest
-SKIP_FIRST_N = 0  # Skip first N samples
+SKIP_FIRST_N = 25  # Skip first N samples
 BIN_SIZE = 10000 if DATASET_TYPE == "pkl" else None  # Bin size for pkl only
+
+
+
 
 sample_list = []
 if DATASET_TYPE == "h5":
@@ -47,9 +50,10 @@ selected_samples = sample_list[SKIP_FIRST_N:SKIP_FIRST_N + NUM_SAMPLES]
 dataset_label = f"{DATASET_TYPE.upper()} ({SPLIT})"
 print(f"Using {len(selected_samples)} samples for class {GESTURE_CLASS if GESTURE_CLASS is not None else 'ALL'} from {dataset_label}:")
 for sample in selected_samples:
-    print(f"   {sample[1]} (Duration: {sample[0] / 1e6:.2f} s)" if DATASET_TYPE == "pkl" else f"   {sample[1]} (Time bins: {sample[0]})")
+    print(f"{sample[1]} (Duration: {sample[0] / 1e6:.2f} s)" if DATASET_TYPE == "pkl" else f"   {sample[1]} \n   (Time bins: {sample[0]})")
 
 plt.figure(figsize=(12, 6))
+colors = plt.cm.viridis(np.linspace(0, 1, len(selected_samples)))  #  'viridis'  plasma
 
 for i, sample in enumerate(selected_samples):
     if DATASET_TYPE == "h5":
@@ -67,8 +71,7 @@ for i, sample in enumerate(selected_samples):
         event_counts, _ = np.histogram(timestamps, bins=bins)
         label_text = f"Sample {i + 1} ({duration / 1e6:.2f} s)"
 
-    plt.plot(bins[:-1] if DATASET_TYPE == "pkl" else bins, event_counts, marker="o", linestyle="-", label=label_text)
-
+    plt.plot(bins[:-1] if DATASET_TYPE == "pkl" else bins, event_counts, marker="o", linestyle="-",color=colors[i], label=label_text)
 
 plt.xlabel("Time Bins" if DATASET_TYPE == "h5" else "Time (µs)")
 plt.ylabel("Total Event Count")

@@ -24,7 +24,7 @@ ENCODING_METHOD = GraspHDEventEncoder # xx
 
 
 
-TIME_INTERPOLATION_METHOD = "encode_temporalper"  # "grasp_hd", "event_hd" , encode_temporalpermutation, thermometer, permutation,encode_temporalpermutation_weight
+TIME_INTERPOLATION_METHOD = "thermometer"  # "grasp_hd", "event_hd" , encode_temporalpermutation, thermometer, permutation,encode_temporalpermutation_weight
 
 def main():
     device = "cpu"
@@ -33,8 +33,8 @@ def main():
     max_samples_train = 72
     max_samples_test = 4
     DIMS = 6000
-    K = 100
-    Timewindow = 50_000
+    K = 50
+    Timewindow = 10_000
     Train_split ="picked_samples"
     save = True
 

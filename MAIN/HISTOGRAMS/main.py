@@ -23,7 +23,7 @@ TRAINING_METHOD = "adaptive"  # "centroid" "adaptive" "iterative"
 LEARNING_RATE = 0.5
 ENCODING_METHOD =  # x
 TIME_INTERPOLATION_METHOD =
-#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#device = torch.device("cuda" if torch.cuda.is_available() else "soundcpu")
 device = "cpu"
 print("Using", device)
 

@@ -47,7 +47,7 @@ def update(frame):
     scatter_on.set_offsets(np.column_stack((x_on, y_on)))
     scatter_off.set_offsets(np.column_stack((x_off, y_off)))
 
-    ax.set_title(f"Gesture {class_id} | Bin {current_frame}/{T - 1} | {current_frame * 10} ms elapsed")
+    ax.set_title(f"Gesture {class_id} | Bin {current_frame + 1}/{T} | {current_frame * 10} ms elapsed")
 
     return scatter_on, scatter_off
 def toggle_pause(event):
