@@ -76,7 +76,6 @@ def main():
             encoded_sample = encoder.encode_accumulation_weight(events, class_id)
         elif TIME_INTERPOLATION_METHOD in [ "thermometer", "permutation"]:
             encoded_sample = encoder.encode_accumulation(events, class_id)
-
         encoded_vectors.append(encoded_sample)
         class_labels.append(class_id)
 
@@ -87,7 +86,7 @@ def main():
     print(f"Encoded Matrix Stats - Min: {encoded_matrix.min()}, Max: {encoded_matrix.max()}")
 
     if save:
-        run_folder = create_unique_run_folder()
+        run_folder = create_unique_run_folder(base_path="/space/chair-nas/tosy/test_run/")
         params = {
             "k": K, "Timewindow": Timewindow, "DIMS": DIMS, "max_samples_train": max_samples_train,
             "max_samples_test": max_samples_test, "Train_split": Train_split, "max_time": max_time,
@@ -215,7 +214,7 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
                 f"  P_inside_2 vs P11 (Center vs Bottom-Right): {torchhd.cosine_similarity(P_inside_2, P11).item():.4f}")
             print(
                 f"  P_inside_3 vs P11 (Close to Bottom-Right): {torchhd.cosine_similarity(P_inside_3, P11).item():.4f}")
-def create_unique_run_folder(base_path="/space/chair-nas/tosy/test_run/"):
+def create_unique_run_folder(base_path):
     """next available run folder."""
     os.makedirs(base_path, exist_ok=True)
     existing_runs = sorted([d for d in os.listdir(base_path) if d.startswith("run_")])
