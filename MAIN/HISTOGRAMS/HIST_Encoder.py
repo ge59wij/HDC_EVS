@@ -7,63 +7,93 @@ import torch
 import torchhd
 import numpy as np
 
+'''Spatial Encoder (Per Bin):
+   ON/OFF events → Position-bound HVs
+   Temporal Encoder (Per Window):
+   n-Grams within window
+   Skip 404 bins
+   Sliding Window Generator:
+   window_size + overlap parameters'''
+
 class HISTEncoder:
-    def __init__(self, height, width, dims, device, threshold, window_size, stride):
+    def __init__(self, height, width, dims, device, threshold, window_size, n_gram):
         self.height = height
         self.width = width
         self.dims = dims
-        self.threshhold = threshold
+        self.threshold = threshold
         self.device = torch.device(device)
         self.window_size = window_size  # N-bins per encoding window
-        self.stride = stride  # Overlap
-        self.hv_gen = HDHypervectorGenerators(height, width, dims, device, threshold, window_size, stride)
+        self.n_gram = n_gram  # temporal permutation
+        self.hv_gen = HDHypervectorGenerators(height, width, dims, device, threshold, window_size=window_size, n_gram=n_gram)
+        self.time_hvs = self.hv_gen.time_hvs
+        self.BACKGROUND_LABEL = 404
 
-    def encode_bin(self, bin_data, bin_idx):
-        """Encodes a single bin"""
-        print(f"  [DEBUG] Encoding BIN {bin_idx}")
+    def encode_bin(self, bin_data, time_idx):
+        """Encodes bin with bundled ON/OFF before polarity binding"""
+        on_events = bin_data[0]
+        off_events = bin_data[1]
 
-        bin_hv = torch.zeros(self.dims, device=self.device)
-        on_events = bin_data[0]  # ON-event matrix
-        off_events = bin_data[1]  # OFF-event matrix
+        # Bundle all ON/OFF positions before binding
+        on_pos_hv = torch.zeros(self.dims, device=self.device)
+        off_pos_hv = torch.zeros(self.dims, device=self.device)
+        #print(f"[DEBUG] Encoding bin at time index {time_idx}")
+        #print(
+        #    f"  - ON events count: {on_events.count_nonzero().item()}, OFF events count: {off_events.count_nonzero().item()}")
 
-        for y in range(self.height):
-            for x in range(self.width):
-                if on_events[y, x] >= self.hv_gen.threshold:
-                    #print(f"    ➤ ON Event at ({x},{y})")
-                    pos_hv = self.hv_gen.get_pos_hv(x, y)
-                    pixel_hv = torchhd.bind(pos_hv, self.hv_gen.H_I_on)
-                    bin_hv = torchhd.bundle(bin_hv, pixel_hv)
+        y_on, x_on = torch.where(on_events >= self.threshold)
+        for x, y in zip(x_on, y_on):
+            on_pos_hv = torchhd.bundle(on_pos_hv, self.hv_gen.get_pos_hv(x, y))
 
-                if off_events[y, x] >= self.hv_gen.threshold:
-                    #print(f"    ➤ OFF Event at ({x},{y})")
-                    pos_hv = self.hv_gen.get_pos_hv(x, y)
-                    pixel_hv = torchhd.bind(pos_hv, self.hv_gen.H_I_off)
-                    bin_hv = torchhd.bundle(bin_hv, pixel_hv)
+        y_off, x_off = torch.where(off_events >= self.threshold)
+        for x, y in zip(x_off, y_off):
+            off_pos_hv = torchhd.bundle(off_pos_hv, self.hv_gen.get_pos_hv(x, y))
 
-        # Bind with time hypervector
-        bin_hv = torchhd.bind(bin_hv, self.hv_gen.get_time_hv(bin_idx))
-        return torchhd.normalize(bin_hv)
+        # Bind once per polarity
+        on_hv = torchhd.bind(on_pos_hv, self.hv_gen.H_I_on)
+        off_hv = torchhd.bind(off_pos_hv, self.hv_gen.H_I_off)
+        #print(f"  - ON HV Bundled: {on_pos_hv.shape}, OFF HV Bundled: {off_pos_hv.shape}")
 
-    def encode_window(self, event_data, start_bin, bundle_size):
-        """Encodes a sliding window of N-bins into one hypervector using multiset instead of bundling."""
-        print(f"[DEBUG] Encoding WINDOW {start_bin}-{start_bin + self.window_size}")
+        # Bundle polarities instead of binding
+        bin_hv = torchhd.bundle(on_hv, off_hv)
+        encoded_bin = torchhd.bind(bin_hv, self.time_hvs[time_idx % self.n_gram])
+        #print(f"  - Final Encoded Bin HV: {bin_hv.shape}")
+        return torchhd.normalize(encoded_bin)
 
-        end_bin = min(start_bin + self.window_size, event_data.shape[0])
-        bin_hvs = []  # Collect bin vectors instead of initializing to zero
+    def encode_window(self, window_data, window_labels):
+        """Encodes a sliding window with separate gesture/background vectors"""
+        gesture_bins = []
+        #background_bins = []
 
-        for i, bin_idx in enumerate(range(start_bin, end_bin)):
-            bin_hv = self.encode_bin(event_data[bin_idx], bin_idx)
-            bin_hvs.append(bin_hv)  # Store instead of bundling
+        for idx, (bin_data, label) in enumerate(zip(window_data, window_labels)):
+            if label == self.BACKGROUND_LABEL:
+                continue
 
-        # Stack and multiset instead of incremental bundling
-        if len(bin_hvs) > 0:
-            stacked_bins = torch.stack(bin_hvs)
-            window_hv = torchhd.multiset(stacked_bins)  # Multiset operation
-            window_hv = torchhd.normalize(window_hv)
-        else:
-            window_hv = torch.zeros(self.dims, device=self.device)  # If empty, return zero vector
+            gesture_bins.append((bin_data, idx))
+        #print(f"[DEBUG] Encoding Window: {len(gesture_bins)} valid gesture bins found")
 
-        print(f"[DEBUG] Finished encoding window {start_bin}-{end_bin}")
-        return window_hv
+        gesture_hv = self._process_ngrams(gesture_bins)
+        #bg_hv = self._process_ngrams(background_bins)
+        #print(f"[DEBUG] Encoded Window HV: {gesture_hv.shape if gesture_hv is not None else 'None'}")
 
+        return gesture_hv  #, bg_hv
 
+    def _process_ngrams(self, bins):
+        """Applies n-gram encoding, ensuring valid gesture bins are encoded."""
+
+        if len(bins) == 0:
+            return None  # **No valid gesture bins in window**
+
+        window_hv = torch.zeros(self.dims, device=self.device)
+
+        # **Apply n-gram encoding, handling edge cases**
+        if len(bins) < self.n_gram:
+            print(
+                f"[WARNING] Not enough bins for full n-gram (Needed {self.n_gram}, got {len(bins)}). Skipping these bins.")
+            return None  # Skip this window
+
+        for i in range(len(bins) - self.n_gram + 1):
+            gram = bins[i:i + self.n_gram]
+            gram_hv = torchhd.multibind(torch.stack([self.encode_bin(bin, idx) for bin, idx in gram]))
+            window_hv = torchhd.bundle(window_hv, gram_hv)
+
+        return torchhd.normalize(window_hv) if window_hv.norm() > 0 else None
