@@ -29,8 +29,8 @@ class HDHypervectorGenerators:
         self.H_I_off = -self.H_I_on  # OFF polarity is the inverse of ON
 
         # **Spatial Hypervectors using Thermometer Encoding**
-        self.HV_x = self._generate_axis_hvs(self.width, levels=4)
-        self.HV_y = self._generate_axis_hvs(self.height, levels=4)
+        self.HV_x = self._generate_axis_hvs(self.width, levels=width)
+        self.HV_y = self._generate_axis_hvs(self.height, levels=height)
         print(f"[DEBUG] Generated Polarity HVs: ON shape {self.H_I_on.shape}, OFF shape {self.H_I_off.shape}")
         print(f"[DEBUG] Generated {len(self.HV_x)} X-position HVs, {len(self.HV_y)} Y-position HVs")
 
@@ -38,7 +38,7 @@ class HDHypervectorGenerators:
         self.time_hvs = self._generate_time_hvs(self.window_size)
         print(f"[DEBUG] Generated {len(self.time_hvs)} Time HVs")
 
-    def _generate_axis_hvs(self, size, levels=4):
+    def _generate_axis_hvs(self, size, levels):
         """
         Creates continuous position HVs using **thermometer encoding**.
         - Uses multiple **permutation levels** for gradual variation.

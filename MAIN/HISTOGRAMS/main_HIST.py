@@ -28,8 +28,8 @@ NUM_RANDOM_VECTORS = 50
 EVENT_THRESHOLD = 100  # Bins with total ON+OFF events < threshold => background (404)
 
 
-WINDOW_SIZE = 10  # Total bins processed together
-NGRAM_SIZE = 4  # Temporal context depth inside window
+WINDOW_SIZE = 9  # Total bins processed together
+NGRAM_SIZE = 3  # Temporal context depth inside window
 OVERLAP = 2  # Stride = window_size - overlap
 def bin_labeling(files):
     """
@@ -71,7 +71,7 @@ def load_dataset(dataset_folder, is_test=False, max_test_samples=30):
         class_labels = {}
         for file in files:
             with h5py.File(file, "r") as f:
-                class_labels[file] = int(f["class_id"][()])  # Ensure it's a Python integer
+                class_labels[file] = int(f["class_id"][()].item())  # Ensure it's a Python integer
 
         # 2. **Sort samples into class-wise bins**
         class_buckets = defaultdict(list)
@@ -136,33 +136,49 @@ def validate(dataloader, encoder):
         return [], []
 
     return list(class_vectors.values()), list(class_vectors.keys())
-def plot_heatmap(vectors_matrix, class_labels):
-    unique_classes = set(class_labels)
+def plot_heatmap(vectors_matrix, class_labels, num_per_class=6):
+    """Plots a heatmap of cosine similarity for multiple samples per class."""
+    unique_classes = sorted(set(class_labels))  # Ensure classes are ordered
     selected_vectors = []
     selected_labels = []
-    num_per_class = 6
+
+    # **Sort and sample multiple per class**
     for cls in unique_classes:
         indices = [i for i, lbl in enumerate(class_labels) if lbl == cls]
-        sampled_indices = random.sample(indices, min(num_per_class, len(indices)))  # Pick `num_per_class` samples
+        if len(indices) >= num_per_class:
+            sampled_indices = random.sample(indices, num_per_class)
+        else:
+            sampled_indices = indices  # Use all available if less than `num_per_class`
+
         for idx in sampled_indices:
             selected_vectors.append(vectors_matrix[idx])
             selected_labels.append(cls)
 
+    # **Stack selected vectors for cosine similarity computation**
     selected_vectors = torch.stack(selected_vectors).cpu()
-    similarity_matrix = torchhd.cosine_similarity(selected_vectors, selected_vectors).cpu().numpy()
+    similarity_matrix = torchhd.functional.cosine_similarity(selected_vectors, selected_vectors).cpu().numpy()
 
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(similarity_matrix, annot=True, fmt=".2f", cmap="coolwarm",
-                xticklabels=selected_labels, yticklabels=selected_labels,
-                cbar=True, square=True, linewidths=0.5)
+    # **Sort for better visualization**
+    sorted_indices = np.argsort(selected_labels)
+    sorted_vectors_matrix = similarity_matrix[sorted_indices][:, sorted_indices]
+    sorted_class_labels = [selected_labels[i] for i in sorted_indices]
 
-    plt.title(f"Cosine Similarity Heatmap (One Sample Per Class)")
-    plt.xlabel("Sample Index (Class ID)")
-    plt.ylabel("Sample Index (Class ID)")
+    # **Plot heatmap**
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        sorted_vectors_matrix, annot=True, fmt=".2f", cmap="coolwarm",
+        xticklabels=sorted_class_labels, yticklabels=sorted_class_labels,
+        cbar=True, square=True, linewidths=0.5, annot_kws={"size": 7}
+    )
+
+    plt.title("Cosine Similarity Heatmap (Multiple Samples Per Class)")
+    plt.xlabel("Sample Index (Sorted by Class)")
+    plt.ylabel("Sample Index (Sorted by Class)")
     plt.show()
+
+
 def train_model(dataloader, encoder):
     centroids = defaultdict(list)
-
     all_vectors = []
     all_labels = []
 
@@ -173,15 +189,17 @@ def train_model(dataloader, encoder):
             all_vectors.append(hv)  # Store for analysis
             all_labels.append(cls)  # Store corresponding labels
 
-    print("Classes found in training:", centroids.keys())
+    print("Classes in Model:", list(centroids.keys()))  # ✅ Moved after model init
 
-    model = torchhd.models.Centroid(DIMS, len(centroids))
+    model = torchhd.models.Centroid(DIMS, len(centroids))  # Initialize Centroid model
+
     with torch.no_grad():
         for cls, vectors in centroids.items():
-            centroid = torch.stack(vectors).mean(dim=0)
-            model.add(centroid.unsqueeze(0), torch.tensor([cls]))
+            centroid = torch.stack(vectors).mean(dim=0)  # Compute class centroid
+            model.add(centroid.unsqueeze(0), torch.tensor([cls]))  # Add to model
 
-    return model, all_vectors, all_labels  #
+    return model, all_vectors, list(centroids.keys())  # ✅ Explicitly return class labels
+
 
 def evaluate_model(dataloader, encoder, model):
     correct, total = 0, 0
@@ -302,7 +320,7 @@ def main():
     else:
         print("[ERROR] No encoded vectors available for heatmap.")
 
-################training:
+    ################training:
     with torch.no_grad():
         for event_data, class_ids, filename in tqdm(dataloader_train, desc="Training"):
             hvs = process_sample(event_data.squeeze(0), class_ids.squeeze(0), encoder)

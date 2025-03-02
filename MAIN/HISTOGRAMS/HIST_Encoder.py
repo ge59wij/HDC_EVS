@@ -28,12 +28,14 @@ class HISTEncoder:
         self.time_hvs = self.hv_gen.time_hvs
         self.BACKGROUND_LABEL = 404
 
+
     def encode_bin(self, bin_data, time_idx):
         """Encodes bin with bundled ON/OFF before polarity binding"""
         on_events = bin_data[0]
         off_events = bin_data[1]
 
-        # Bundle all ON/OFF positions before binding
+
+        # Bundle all ON/OFF positions before binding hmmmmmmm
         on_pos_hv = torch.zeros(self.dims, device=self.device)
         off_pos_hv = torch.zeros(self.dims, device=self.device)
         #print(f"[DEBUG] Encoding bin at time index {time_idx}")
@@ -41,6 +43,9 @@ class HISTEncoder:
         #    f"  - ON events count: {on_events.count_nonzero().item()}, OFF events count: {off_events.count_nonzero().item()}")
 
         y_on, x_on = torch.where(on_events >= self.threshold)
+        #for x, y in zip(x_on, y_on):
+        #    print(f"[DEBUG] Event at: x={x}, y={y} (Shape={on_events.shape})")
+
         for x, y in zip(x_on, y_on):
             on_pos_hv = torchhd.bundle(on_pos_hv, self.hv_gen.get_pos_hv(x, y))
 
