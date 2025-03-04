@@ -1,130 +1,77 @@
 import torch
 import torchhd
-from grasphdencoding_seedhvs import GraspHDseedEncoder
+from MAIN.DAT_approach.grasphd_appraoch.with_pickle.grasphdencoding_seedhvs import *
 import numpy as np
 
 np.set_printoptions(suppress=True, precision=8)
 
 
-class GraspHDEventEncoder(GraspHDseedEncoder):
+class Raw_events_HDEncoder(seedEncoder):
     def __init__(self, height, width, dims, k, time_subwindow, device, max_time, time_method):
         super().__init__(height, width, dims, time_subwindow, k, device, max_time, time_method)
         self.time_hv_cache = {}
 
-    def get_position_hv(self, x, y):
-        """ Retrieve or generate Position HV.
-            Checks cache (position_hvs_cache), if doesn't exist: Interpolate then cache.
-        """
 
-        # Clamp coordinates to grid
-        x_clamped = min(max(x, 0), self.width)
-        y_clamped = min(max(y, 0), self.height)
-        key = (x_clamped, y_clamped)
-
-        # Check cache first
-        if key in self.position_hvs_cache:
-            return self.position_hvs_cache[key]
-        '''
-        # Check if it's a precomputed corner
-        if (x_clamped in self.x_to_index) and (y_clamped in self.y_to_index):
-            i = self.x_to_index[x_clamped]
-            j = self.y_to_index[y_clamped]
-            hv = self.corner_grid[i, j]
-        else:
-        '''
-        # If not found in cache, interpolate it and store it
-        hv = self._interpolate_hv(x_clamped, y_clamped)
-        self.position_hvs_cache[key] = hv  # Cache the interpolated result
-        return hv
-
-    # '''ONE loop appraoch grasp:
-    def encode_grasphd(self, events, class_id):
-        """Encodes events using GraspHD method, added subwindow-based accumulation following the paper method: #1 interpolation between anchor TimeHVS"""
-        print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
-
-        H_spatiotemporal = None  # Final encoding
-        current_subwindow = None  # Track the current subwindow
-        H_spatial_accumulated = None  # Running sum of spatial encodings per subwindow
-
-        for t, x, y, polarity in events:
-            subwindow_index = t // self.time_subwindow
-
-            P_xy = self.get_position_hv(x, y)  # Fetch position HV
-            I_p = self.H_I_on if polarity == 1 else self.H_I_off
-            H_spatial = torchhd.bind(P_xy, I_p)
-
-            if current_subwindow is None:  # First event
-                current_subwindow = subwindow_index
-                H_spatial_accumulated = H_spatial
-
-            elif subwindow_index == current_subwindow:  # Same subwindow → accumulate
-                H_spatial_accumulated = torchhd.multiset(torch.stack([H_spatial_accumulated, H_spatial]))
-            else:  # New subwindow detected → finalize previous subwindow
-                T_t = self.get_time_hv(current_subwindow * self.time_subwindow)  # Get time HV for previous subwindow
-                H_temporal_t = torchhd.bind(H_spatial_accumulated, T_t)  # Bind spatial to time
-                H_spatiotemporal = H_temporal_t if H_spatiotemporal is None else \
-                    torchhd.multiset(torch.stack([H_spatiotemporal, H_temporal_t]))
-                # Reset for new subwindow
-                current_subwindow = subwindow_index
-                H_spatial_accumulated = H_spatial  # Start new accumulation
-        # Finalize last accumulated subwindow
-        if H_spatial_accumulated is not None:
-            T_t = self.get_time_hv(current_subwindow * self.time_subwindow)
-            H_temporal_t = torchhd.bind(H_spatial_accumulated, T_t)
-            H_spatiotemporal = H_temporal_t if H_spatiotemporal is None else \
-                torchhd.multiset(torch.stack([H_spatiotemporal, H_temporal_t]))
-        # **Normalize before returning**
-        H_spatiotemporal = torchhd.normalize(H_spatiotemporal)
-        print(f"\nEncoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}")
-
-        return H_spatiotemporal
 
     # 1 loop
     def encode_eventhd(self, events, class_id):
-        """Encodes events using EventHD method: binding all spatial encodings per timestamp before binding with time.
-        Accumulate Events for the Same Timestamp (gets bundled into H_spatial_accumulated)
-            Otherwise, bind the accumulated spatial encoding to a time hypervector (T_t)
-        All timestamp-wise encodings are bundled together into H_spatiotemporal.
+        """Encodes events using EventHD or STEMHD method (controlled via `time_interpolation_method`).
+        - **Spatial encoding**: Interpolates position HVs.
+        - **Temporal encoding**:
+        - `event_hd_timepermutation`: Uses permutation-based encoding (shifts base HV).
+        - `event_hd_timeinterpolation`: Uses weighted sum per element for time interpolation.
+        - `stem_hd`: Uses concatenation-based interpolation (one HV per bin).
         """
         print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
+
         H_spatiotemporal = None  # Final encoding
-        current_t = None  # Track the current timestamp
-        H_spatial_accumulated = None  # Accumulate spatial encoding per timestamp
+        temporal_dict = {}  # Dictionary to accumulate spatial encodings per timestamp
+
+        # **Step 1: Compute Spatial Encoding Per Event and Accumulate per Time**
         for t, x, y, polarity in events:
-            P_xy = self.get_position_hv(x, y)
-            I_p = self.H_I_on if polarity == 1 else self.H_I_off
-            H_spatial = torchhd.bind(P_xy, I_p)
-            if current_t is None:  # First event => Initialize
-                current_t = t
-                H_spatial_accumulated = H_spatial
-                event_count = 1
-            elif t == current_t:  # Same timestamp => Accumulate spatial encoding
-                H_spatial_accumulated = torchhd.bundle(H_spatial_accumulated, H_spatial)
-                torchhd.normalize(H_spatial_accumulated)
-                event_count += 1
-            else:  # New timestamp  Finalize previous timestamp and move on
-                T_t = self.get_time_hv(current_t)  # Get time HV for previous timestamp
-                H_temporal_t = torchhd.bind(H_spatial_accumulated, T_t)  # Bind accumulated spatial to time HV
-                H_spatiotemporal = H_temporal_t if H_spatiotemporal is None else \
-                    torchhd.bind(H_spatiotemporal, H_temporal_t)
-                torchhd.normalize(H_spatiotemporal)
-            current_t = t
-            H_spatial_accumulated = H_spatial  # Start fresh accumulation for the new timestamp
-        # Processing the last accumulated timestamp**
-        if H_spatial_accumulated is not None:
-            T_t = self.get_time_hv(current_t)
-            H_temporal_t = torchhd.bind(H_spatial_accumulated, T_t)
-            torchhd.normalize(H_temporal_t)
-            H_spatiotemporal = H_temporal_t if H_spatiotemporal is None else \
-                torchhd.bind(H_spatiotemporal, H_temporal_t)
-            torchhd.normalize(H_spatiotemporal)
-        print(f"Hsample: {H_spatiotemporal}")
-        # print(f"Norm before normalization: {torch.norm(H_spatiotemporal)}")
-        # H_spatiotemporal = torchhd.normalize(H_spatiotemporal)
-        # print(f"Norm after normalization: {torch.norm(H_spatiotemporal)}")
+            P_xy = self.get_position_hv(x, y)  # Fetch position hypervector
+            I_p = self.H_I_on if polarity == 1 else self.H_I_off  # Fetch polarity hypervector
+            H_spatial = torchhd.bind(P_xy, I_p)  # Bind position and polarity
+
+            if t not in temporal_dict:
+                temporal_dict[t] = H_spatial  # First event in this timestamp
+            else:
+                temporal_dict[t] = torchhd.bundle(temporal_dict[t],
+                                                  H_spatial)  # Bundle new event into accumulated spatial encoding
+
+        # **Step 2: Bind Each Timestamp’s Accumulated Spatial Encoding with its Time Hypervector**
+        for t, H_spatial_accumulated in temporal_dict.items():
+            T_t = self.get_time_hv(t)  # Get time hypervector for this timestamp
+
+            if self.time_interpolation_method == "stem_hd":
+                # STEMHD uses concatenation-based interpolation for temp
+                H_timebin = torch.cat((H_spatial_accumulated[:self.dims // 2], T_t[-self.dims // 2:]), dim=0)
+            else:
+                # EventHD & GraspHD use weighted sum per element
+                H_timebin = torchhd.bind(H_spatial_accumulated, T_t)
+
+            # **Step 3: Accumulate Time-Encoded Hypervectors Across All Time Bins**
+            H_spatiotemporal = H_timebin if H_spatiotemporal is None else torchhd.bundle(H_spatiotemporal, H_timebin)
+
+        if H_spatiotemporal is not None:
+            H_spatiotemporal = torchhd.normalize(H_spatiotemporal)
+
         print(f"\nEncoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}")
         return H_spatiotemporal
-    # '''
+
+
+
+
+
+
+
+
+
+
+
+
+
+    '''
     def encode_temporalpermutation(self, events, class_id):
         """Encodes events using permutation-based temporal encoding.
         - Groups timestamps into bins of `bin_size`
@@ -263,7 +210,7 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         print(f"\nEncoding Complete | Class: {class_id} | Output: {H_gesture.shape}")
         return H_gesture
 
-    '''
+
     def encode_grasphd(self, events, class_id):   ## 2 for loops!
         """Encodes events using GraspHD method, added subwindow-based accumulation following the paper method: #1 interpolation between anchor TimeHVS"""  
         print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}") 
@@ -335,6 +282,43 @@ class GraspHDEventEncoder(GraspHDseedEncoder):
         print(f"Encoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}\n")
         return H_spatiotemporal
 
+   def encode_grasphd(self, events, class_id):
+        """Encodes events using GraspHD method, added subwindow-based accumulation following the paper method: #1 interpolation between anchor TimeHVS"""
+        print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
 
+        H_spatiotemporal = None  # Final encoding
+        current_subwindow = None  # Track the current subwindow
+        H_spatial_accumulated = None  # Running sum of spatial encodings per subwindow
 
-    '''
+        for t, x, y, polarity in events:
+            subwindow_index = t // self.time_subwindow
+
+            P_xy = self.get_position_hv(x, y)  # Fetch position HV
+            I_p = self.H_I_on if polarity == 1 else self.H_I_off
+            H_spatial = torchhd.bind(P_xy, I_p)
+
+            if current_subwindow is None:  # First event
+                current_subwindow = subwindow_index
+                H_spatial_accumulated = H_spatial
+
+            elif subwindow_index == current_subwindow:  # Same subwindow → accumulate
+                H_spatial_accumulated = torchhd.multiset(torch.stack([H_spatial_accumulated, H_spatial]))
+            else:  # New subwindow detected → finalize previous subwindow
+                T_t = self.get_time_hv(current_subwindow * self.time_subwindow)  # Get time HV for previous subwindow
+                H_temporal_t = torchhd.bind(H_spatial_accumulated, T_t)  # Bind spatial to time
+                H_spatiotemporal = H_temporal_t if H_spatiotemporal is None else \
+                    torchhd.multiset(torch.stack([H_spatiotemporal, H_temporal_t]))
+                # Reset for new subwindow
+                current_subwindow = subwindow_index
+                H_spatial_accumulated = H_spatial  # Start new accumulation
+        # Finalize last accumulated subwindow
+        if H_spatial_accumulated is not None:
+            T_t = self.get_time_hv(current_subwindow * self.time_subwindow)
+            H_temporal_t = torchhd.bind(H_spatial_accumulated, T_t)
+            H_spatiotemporal = H_temporal_t if H_spatiotemporal is None else \
+                torchhd.multiset(torch.stack([H_spatiotemporal, H_temporal_t]))
+        # **Normalize before returning**
+        H_spatiotemporal = torchhd.normalize(H_spatiotemporal)
+        print(f"\nEncoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}")
+
+        return H_spatiotemporal '''

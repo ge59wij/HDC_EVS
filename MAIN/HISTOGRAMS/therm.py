@@ -3,6 +3,9 @@ import torchhd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from HIST_Encoder import HDHypervectorGenerators
+from MAIN.DAT_approach.grasphd_appraoch.with_pickle.grasphdencoding import Raw_events_HDEncoder
+from MAIN.DAT_approach.grasphd_appraoch.with_pickle.grasphdencoding_seedhvs import *
 
 def generate_linear_mapping_hvs(size, dims, device):
     """
@@ -12,7 +15,7 @@ def generate_linear_mapping_hvs(size, dims, device):
     """
     levels = size  # Number of discrete positions
     flip_bits = dims // (4 * (levels - 1))  # Number of bits to flip per level
-    base_hv = torchhd.random(1, dims, "MAP", device=device).squeeze(0)
+    base_hv = torchhd.random(1, dims, "MAP").squeeze(0)
     hvs = [base_hv.clone()]
 
     for i in range(1, levels):
@@ -22,7 +25,32 @@ def generate_linear_mapping_hvs(size, dims, device):
         hvs.append(new_hv)
 
     return torch.stack(hvs)
+def plot_pixel_similarity(hv_gen, chosen_x, chosen_y, title="Cosine Similarity of Pixel with Others"):
+    """Computes and plots similarity of one pixel to all other pixels."""
+    height, width = hv_gen.height, hv_gen.width
+    dims = hv_gen.dims
 
+    # Generate hypervectors for all pixel positions
+    hv_grid = torch.zeros((height, width, dims), device=hv_gen.device)
+    for x in range(width):
+        for y in range(height):
+            hv_grid[y, x] = hv_gen.get_pos_hv(x, y)
+
+    # Get the chosen pixel's hypervector
+    chosen_hv = hv_grid[chosen_y, chosen_x]
+
+    # Compute cosine similarity between the chosen pixel and all others
+    hv_flattened = hv_grid.view(-1, dims)  # Reshape to (height * width, dims)
+    similarity_matrix = torchhd.cosine_similarity(chosen_hv, hv_flattened).view(height, width).cpu().numpy()
+
+    # Plot heatmap
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(similarity_matrix, annot=False, fmt=".2f", cmap="coolwarm",
+                cbar=True, square=False, linewidths=0.5)
+    plt.title(f"{title} ({hv_gen.spatial_encoding.capitalize()})")
+    plt.xlabel("X Position")
+    plt.ylabel("Y Position")
+    plt.show()
 
 def plot_similarity_heatmap(hvs, title):
     """Plots a heatmap of cosine similarities between hypervectors."""
@@ -35,14 +63,131 @@ def plot_similarity_heatmap(hvs, title):
     plt.xlabel("Position Index")
     plt.ylabel("Position Index")
     plt.show()
+def plot_pixel_similarity_grasphd(hv_gen, chosen_x, chosen_y, title="Cosine Similarity of Pixel with Others"):
+    """Computes and plots similarity of one pixel to all other pixels for GraspHDEventEncoder."""
+    height = hv_gen.height  # Use actual encoder dimensions
+    width = hv_gen.width
+    dims = hv_gen.dims
 
+    # Generate hypervectors for all pixel positions
+    hv_grid = torch.zeros((height, width, dims), device=hv_gen.device)
+    for x in range(width):
+        for y in range(height):
+            hv_grid[y, x] = hv_gen.get_position_hv(x, y)  # Use get_position_hv() instead of get_pos_hv()
 
+    # Get the chosen pixel's hypervector
+    chosen_hv = hv_grid[chosen_y, chosen_x]
+
+    # Compute cosine similarity between the chosen pixel and all others
+    hv_flattened = hv_grid.view(-1, dims)  # Reshape to (height * width, dims)
+    similarity_matrix = torchhd.cosine_similarity(chosen_hv, hv_flattened).view(height, width).cpu().numpy()
+
+    # Plot heatmap
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(similarity_matrix, annot=False, fmt=".2f", cmap="coolwarm",
+                cbar=True, square=False, linewidths=0.5)
+    plt.title(f"{title} (GraspHDEventEncoder)")
+    plt.xlabel("X Position")
+    plt.ylabel("Y Position")
+    plt.show()
+
+def print_pairwise_similarities(hv_gen):
+    """Prints cosine similarity between selected hypervector pairs inside and around a 3x3 window."""
+    height, width = hv_gen.height, hv_gen.width
+    dims = hv_gen.dims
+
+    # Define points inside and around the 3x3 window
+    points = {
+        "P00": (0, 0), "P01": (0, 1), "P02": (0, 2), "P03": (0, 3),  # Top row
+        "P10": (1, 0), "P11": (1, 1), "P12": (1, 2), "P13": (1, 3),  # Second row
+        "P20": (2, 0), "P21": (2, 1), "P22": (2, 2), "P23": (2, 3),  # Third row
+        "P30": (3, 0), "P31": (3, 1), "P32": (3, 2), "P33": (3, 3),  # Beyond K=3 (4th row)
+    }
+
+    # Extract hypervectors for these positions
+    hv_dict = {name: hv_gen.get_position_hv(x, y) for name, (y, x) in points.items()}
+
+    print("\n**Pairwise Cosine Similarities Inside and Around K=3 Window**\n")
+
+    # Compare each pair of points
+    point_names = list(hv_dict.keys())
+    for i in range(len(point_names)):
+        for j in range(i + 1, len(point_names)):  # Avoid redundant calculations
+            p1, p2 = point_names[i], point_names[j]
+            sim = torchhd.cosine_similarity(hv_dict[p1], hv_dict[p2]).item()
+            print(f"Similarity({p1}, {p2}): {sim:.4f}")
+
+def plot_all_pixel_similarity(hv_gen, title="Cosine Similarity of All Pixels"):
+    """Computes and plots cosine similarity between ALL pixel positions."""
+    height = hv_gen.height
+    width = hv_gen.width
+    dims = hv_gen.dims
+
+    # Generate hypervectors for all pixel positions
+    num_pixels = height * width  # Expected number of positions
+    hv_grid = torch.zeros((num_pixels, dims), device=hv_gen.device)
+
+    print(f"[DEBUG] Expected grid shape: ({height}, {width}), Total pixels: {num_pixels}")
+
+    for y in range(height):
+        for x in range(width):
+            index = y * width + x  # Ensure correct indexing
+            hv_grid[index] = hv_gen.get_position_hv(x, y)
+
+    print(f"[DEBUG] HV grid shape: {hv_grid.shape}")  # Should be (num_pixels, dims)
+
+    # Compute cosine similarity between ALL pixel hypervectors
+    similarity_matrix = torchhd.cosine_similarity(hv_grid, hv_grid).cpu().numpy()
+
+    print(f"[DEBUG] Similarity matrix shape: {similarity_matrix.shape}")  # Should be (num_pixels, num_pixels)
+
+    # If similarity matrix is larger than expected, print and stop
+    if similarity_matrix.shape != (num_pixels, num_pixels):
+        print(f"[ERROR] Shape mismatch: Expected ({num_pixels}, {num_pixels}), Got {similarity_matrix.shape}")
+        return
+
+    # Plot heatmap
+    plt.figure(figsize=(8, 8))  # Keep size manageable
+    sns.heatmap(similarity_matrix, annot=False, cmap="coolwarm",
+                cbar=True, square=True, linewidths=0.5)
+
+    plt.title(title)
+    plt.xlabel("Pixel Index")
+    plt.ylabel("Pixel Index")
+    plt.show()
+
+def plot_grasp_interpolation(hv_gen, title="GraspHD Spatial Interpolation"):
+    """Computes and plots cosine similarity between interpolated hypervectors."""
+    height, width = hv_gen.height, hv_gen.width
+    dims = hv_gen.dims
+
+    # Generate hypervectors for all pixel positions using the encoder's interpolation
+    hv_grid = torch.zeros((height, width, dims), device=hv_gen.device)
+    for y in range(height):
+        for x in range(width):
+            hv_grid[y, x] = hv_gen.get_position_hv(x, y)
+
+    # Compute cosine similarity between all pixel hypervectors
+    hv_flattened = hv_grid.view(-1, dims)  # Reshape to (height * width, dims)
+    similarity_matrix = torchhd.cosine_similarity(hv_flattened, hv_flattened).cpu().numpy()
+
+    # Plot similarity heatmap
+    plt.figure(figsize=(8, 8))
+    sns.heatmap(similarity_matrix, annot=False, cmap="coolwarm",
+                cbar=True, square=True, linewidths=0.5)
+
+    plt.title(title)
+    plt.xlabel("Pixel Index")
+    plt.ylabel("Pixel Index")
+    plt.show()
 if __name__ == "__main__":
     device = "cpu"
+    height = 10
+    width = 10
     dims = 10000  # Dimensionality of hypervectors
-    width = 160  # Example: Width of the image grid
-    height = 120  # Example: Height of the image grid
-
+    #width = 160  # Example: Width of the image grid
+    #height = 120  # Example: Height of the image grid
+    
     print("Generating Linear Mapping HVs for X positions...")
     hv_x = generate_linear_mapping_hvs(width, dims, device)
 
@@ -56,7 +201,7 @@ if __name__ == "__main__":
             hv_grid[y, x] = torchhd.bind(hv_x[x], hv_y[y])
 
     # **Choose a pixel (center pixel for now)**
-    chosen_x, chosen_y = 70, 50 #width // 2, height // 2
+    chosen_x, chosen_y = 0, 0 #width // 2, height // 2
     chosen_hv = hv_grid[chosen_y, chosen_x]
 
     # **Compute cosine similarity with all other pixels**
@@ -66,8 +211,48 @@ if __name__ == "__main__":
     # **Plot similarity heatmap**
     plt.figure(figsize=(12, 10))
     sns.heatmap(similarity_matrix, annot=False, fmt=".2f", cmap="coolwarm",
-                cbar=True, square=False, linewidths=0.5)
+                cbar=True, square=True, linewidths=0.5)
     plt.title(f"Cosine Similarity of Pixel ({chosen_x}, {chosen_y}) with Others")
     plt.xlabel("X Position")
     plt.ylabel("Y Position")
     plt.show()
+    
+
+
+
+
+    print("\n[INFO] Thermometer Encoding Similarity")
+    thermometer_hv_gen = HDHypervectorGenerators(
+        height=120, width=160, dims=6000, device="cpu", threshold=1 / 16,
+        window_size=20, n_gram=7, spatial_encoding="thermometer", levels=25, debug=False
+    )
+    #plot_pixel_similarity(thermometer_hv_gen, title="Thermometer Encoding: Single Pixel Similarity")
+
+    print("\n[INFO] Linear Encoding Similarity")
+    linear_hv_gen = HDHypervectorGenerators(
+        height=120, width=160, dims=10000, device="cpu", threshold=1 / 16,
+        window_size=20, n_gram=7, spatial_encoding="linear", levels=None, debug=False
+    )
+    #plot_pixel_similarity(linear_hv_gen, title="Linear Encoding: Single Pixel Similarity")
+
+
+    print("\n[INFO] GraspHD Encoding Similarity")
+    k= 3
+    time_method = "grasp_hd"
+    #TIME_INTERPOLATION_METHOD = "thermometer"  # "grasp_hd", "event_hd" , encode_temporalpermutation, thermometer, permutation,encode_temporalpermutation_weight
+    height=10
+    width=10
+    grasp_hd_hv_gen = Raw_events_HDEncoder(
+        height=height, width=width, dims=6000, k=k, time_subwindow=10_000,
+        device="cpu", max_time=10, time_method=time_method
+    )
+    chosen_x = 0
+    chosen_y = 0
+    #plot_pixel_similarity_grasphd(grasp_hd_hv_gen, chosen_x=chosen_x, chosen_y=chosen_y, title=f"{time_method} spatial: K= {k}, Single Pixel {chosen_x,chosen_y} Similarity")
+    #plot_all_pixel_similarity(grasp_hd_hv_gen, title=f"grasp Spatial Encoding: K={k}, Full Pixel Similarity Matrix")
+
+
+    print_pairwise_similarities(grasp_hd_hv_gen)
+
+    print("\n[INFO] Plotting Existing Interpolation...")
+    plot_grasp_interpolation(grasp_hd_hv_gen, title=f"GraspHD Spatial Interpolation: K={k}")

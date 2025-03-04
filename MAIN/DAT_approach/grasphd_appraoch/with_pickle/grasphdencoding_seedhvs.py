@@ -3,7 +3,7 @@ import torchhd
 import numpy as np
 np.set_printoptions(suppress=True, precision=8)
 
-class GraspHDseedEncoder:
+class seedEncoder:
     def __init__(self, height, width, dims, time_subwindow, k, device, max_time, time_interpolation_method):
         print("Initializing Seed Encoder:")
         self.height = height
@@ -22,57 +22,49 @@ class GraspHDseedEncoder:
         self._generate_time_hvs()
 
     def _generate_time_hvs(self):
+        """Generates time hypervectors based on the selected method."""
         self.time_hvs = {}  # Dictionary storing all time hypervectors
         num_bins = int(self.max_time // self.time_subwindow) + 2
-        # print(f"| Interpolated {num_bins} border seed hypervectors.|")
-        if self.time_interpolation_method == "grasp_hd":
-            """: Interpolates time vectors between anchor bins and stores both anchors and interpolated vectors."""
-            for i in range(num_bins):
-                self.time_hvs[i] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
-            for i in range(num_bins - 1):
-                T_iK = self.time_hvs[i]  # Start bin hypervector
-                T_next = self.time_hvs[i + 1]  # Next bin hypervector
-                # **Ensure correct slicing sum to DIMS!!!!!!!!!!!!!**
 
-                alpha_t = 1 / num_bins  # Uniform bin spacing
-                num_from_T_i = int((1 - alpha_t) * self.dims)
-                num_from_T_next = self.dims - num_from_T_i  # Ensure total = self.dims
-                # Takes the first num_from_T_i dimensions from T_iK, the last num_from_T_next dimensions from T_next
-                interpolated_hv = torch.cat((T_iK[:num_from_T_i], T_next[-num_from_T_next:]), dim=0)
-                # Every interpolated hypervector seems  extremely close to its neighbors!
-                assert interpolated_hv.shape[
-                           0] == self.dims, f"Incorrect dimension {interpolated_hv.shape[0]}, expected {self.dims}"
-                self.time_hvs[i + 0.5] = interpolated_hv  # Store under 0.5step index
-
-        elif self.time_interpolation_method == "event_hd":
-            """Generate Random Anchor vectors, and interpolated ones."""
+        if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation" ]:
+            # Generate anchor hypervectors at bin edges
             for i in range(num_bins):
-                time_key = int(i * self.time_subwindow)  # Ensure int keys
+                time_key = int(i * self.time_subwindow)
                 self.time_hvs[time_key] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
             print(f"| Using {self.time_interpolation_method}. Generated {num_bins} anchor hypervectors.")
 
-            # Generate Interpolated HVs
+            # Interpolation logic
             for i in range(num_bins - 1):
                 T_iK = self.time_hvs[i * self.time_subwindow]
                 T_next = self.time_hvs[(i + 1) * self.time_subwindow]
 
-                # Interpolate within the bin
                 for t in range(1, self.time_subwindow):
-                    proportion_1 = (self.time_subwindow - t) / self.time_subwindow
-                    num_from_T_i = int(proportion_1 * self.dims)
-                    num_from_T_next = self.dims - num_from_T_i
+                    alpha = t / self.time_subwindow  # Interpolation factor
 
-                    interpolated_hv = torch.cat((
-                        T_iK[:num_from_T_i],  # First portion from T_iK
-                        T_next[-num_from_T_next:]  # Remaining from T_next from end
-                    ), dim=0)
+                    if self.time_interpolation_method == "stem_hd":
+                        # STEMHD: Concatenation-based interpolation (one per bin)
+                        num_from_T_i = int((1 - alpha) * self.dims)
+                        num_from_T_next = self.dims - num_from_T_i
+                        interpolated_hv = torch.cat(
+                            (T_iK[:num_from_T_i], T_next[-num_from_T_next:]), dim=0
+                        )
 
-                    interpolated_time = (i * self.time_subwindow) + t  # Exact timestamp
-                    self.time_hvs[interpolated_time] = interpolated_hv  # Store in dict
+                    else:  # EventHD time interpolation & GraspHD
+                        # EventHD & GraspHD: Weighted sum per element (multiple interpolated HVs)
+                        interpolated_hv = (1 - alpha) * T_iK + alpha * T_next
 
-            print(f"| Precomputed {len(self.time_hvs)} total time hypervectors (anchors + interpolations).")
+                    interpolated_time = (i * self.time_subwindow) + t
+                    self.time_hvs[interpolated_time] = interpolated_hv  # Store interpolated HVs
+
+        elif self.time_interpolation_method == "event_hd_timepermutation":
+            # EventHD Permutation Encoding: No interpolation, just base identity vector
+            self.time_hvs[0] = torchhd.identity(1, self.dims, device=self.device).squeeze(0)
+            print(f"| Using Temporal Permutation Encoding | Base Identity Vector Initialized")
+
+        print(f"| Precomputed {len(self.time_hvs)} total time hypervectors (anchors + interpolations).")
 
 
+        '''
         elif self.time_interpolation_method == "encode_temporalpermutation":
             """Uses identity vectors and shifts them based on time"""
             # We don't store interpolated time HVs, but instead a base identity HV
@@ -83,71 +75,30 @@ class GraspHDseedEncoder:
             if 0 not in self.time_hvs:  # Ensure the base identity vector is created
                 self.time_hvs[0] = torchhd.identity(1, self.dims, device=self.device).squeeze(0)
             print(f"| Using Temporal Permutation Encoding | Base Identity Vector Initialized")
+        '''
+
 
     def get_time_hv(self, time):
         """Retrieves time hypervector based on selected interpolation method."""
-        if self.time_interpolation_method == "grasp_hd":
-            """Interpolates between the two closest bins (T[t] and T[t+1])"""
-            bin_index = int((time // self.time_subwindow))  # Ensure integer key
-            interpolated_key = bin_index + 0.5
-            bin_fraction = (time % self.time_subwindow) / self.time_subwindow
-            if interpolated_key in self.time_hvs and bin_fraction >= 0.5:
-                return self.time_hvs[interpolated_key]
-            elif bin_index in self.time_hvs:
-                return self.time_hvs[bin_index]
-            else:
-                print(f"[ERROR] Missing Time HV for time={time} (Bin: {bin_index}, Interpolated: {interpolated_key})")
-                return None  # debug
 
-        elif self.time_interpolation_method == "event_hd":
-            """
-            per actual !!timestamp!!! => too fine 
-            Retrieves precomputed time HV (all timestamps are now cached)."""
+        if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation"]:     # dont call grasp hd, same as eventhd interpo
             if time in self.time_hvs:
                 return self.time_hvs[time]
 
-            # If not found (shouldn't happen), use the closest available time
+            # Find the closest available time hypervector
             closest_key = min(self.time_hvs.keys(), key=lambda k: abs(k - time))
             print(f"[WARNING] Requested time {time} not found! Using closest available: {closest_key}")
             return self.time_hvs[closest_key]
 
+        elif self.time_interpolation_method == "event_hd_timepermutation":
+            """Shift an identity HV based on time"""
+            base_hv = self.time_hvs[0]
+            return torchhd.permute(base_hv, shifts=int(time % self.time_subwindow))  # Shift based on time
 
-        elif self.time_interpolation_method in [ "encode_temporalpermutation"]:
-            """Shifts an identity HV based on time (no caching)"""
-            base_hv = self.time_hvs[0]  # Get identity HV
-            return torchhd.permute(base_hv, shifts= int(time % self.time_subwindow))  # Shift based on time
 
 
-        elif self.time_interpolation_method in [ "thermometer" , "permutation"]:
-            return self.time_continious(time)
 
-    def time_continious(self, time):
-        """Continuous time encoding for thermometer or permutation."""
-        print(f"[DEBUG] time_continious({time}) called with method: {self.time_interpolation_method}")
 
-        if self.time_interpolation_method == "thermometer":
-            """The level increases with time."""
-            num_bins = len(self.time_hvs.keys())
-            scale = time / self.max_time  # Normalize to [0, 1]
-            level = int(scale * num_bins)  # Map to thermometer levels
-
-            thermometer_hv = torch.ones(self.dims, device=self.device) * -1
-            thermometer_hv[:level] = 1  # Activate increasing levels
-            print(f"[DEBUG] Returning Thermometer HV with shape: {thermometer_hv.shape}")
-            return thermometer_hv
-
-        elif self.time_interpolation_method == "permutation":
-            """Shifts the identity time vector based on time."""
-            base_hv = self.time_hvs.get(0, None)  # Get identity HV safely
-            if base_hv is None:
-                print("[ERROR] time_hvs[0] is missing!")
-                return torch.zeros(self.dims, device=self.device)  # Fallback
-
-            permuted_hv = torchhd.permute(base_hv, shifts=int(time % self.time_subwindow))  # Shift based on time
-            print(f"[DEBUG] Returning Permuted HV with shape: {permuted_hv.shape}")
-            return permuted_hv
-        else:  # Fallback to original
-            return self.get_time_hv(time)
 
 
     #-----------------Spatial-----------------------------------
@@ -182,6 +133,128 @@ class GraspHDseedEncoder:
             for j, y in enumerate(self.corner_y_positions)
         }
 
+    def _interpolate_hv(self, x, y):
+        """Interpolates the hypervector at (x, y) using weighted sum of neighboring corner hypervectors."""
+
+        # Clamp coordinates to grid bounds
+        x_clamped = min(max(x, 0), self.width)
+        y_clamped = min(max(y, 0), self.height)
+
+        # Find surrounding corners
+        i = max(0, np.searchsorted(self.corner_x_positions, x_clamped) - 1)
+        j = max(0, np.searchsorted(self.corner_y_positions, y_clamped) - 1)
+
+        i_next = min(i + 1, len(self.corner_x_positions) - 1)
+        j_next = min(j + 1, len(self.corner_y_positions) - 1)
+
+        # Get corner coordinates
+        x0, x1 = self.corner_x_positions[i], self.corner_x_positions[i_next]
+        y0, y1 = self.corner_y_positions[j], self.corner_y_positions[j_next]
+
+        # Retrieve HVs from precomputed corner grid
+        P00 = self.corner_grid[self.x_to_index[x0], self.y_to_index[y0]]
+        P10 = self.corner_grid[self.x_to_index[x1], self.y_to_index[y0]]
+        P01 = self.corner_grid[self.x_to_index[x0], self.y_to_index[y1]]
+        P11 = self.corner_grid[self.x_to_index[x1], self.y_to_index[y1]]
+
+        # Compute interpolation weights
+        dx = max(x1 - x0, 1e-9)
+        dy = max(y1 - y0, 1e-9)
+        lambda_x = (x_clamped - x0) / dx  # Weight for x-direction
+        lambda_y = (y_clamped - y0) / dy  # Weight for y-direction
+
+        # Apply weighted sum per dimension (instead of concatenation)
+        position_hv = (
+                (1 - lambda_x) * (1 - lambda_y) * P00 +
+                lambda_x * (1 - lambda_y) * P10 +
+                (1 - lambda_x) * lambda_y * P01 +
+                lambda_x * lambda_y * P11
+        )
+
+        assert position_hv.shape[0] == self.dims, f"Size mismatch! Expected {self.dims}, got {position_hv.shape[0]}"
+        return position_hv
+
+    def get_position_hv(self, x, y):
+        """ Retrieve or generate Position HV.
+            Checks cache (position_hvs_cache), if doesn't exist: Interpolate then cache.
+        """
+
+        # Clamp coordinates to grid
+        x_clamped = min(max(x, 0), self.width)
+        y_clamped = min(max(y, 0), self.height)
+        key = (x_clamped, y_clamped)
+
+        # Check cache first
+        if key in self.position_hvs_cache:
+            return self.position_hvs_cache[key]
+        '''
+        # Check if it's a precomputed corner
+        if (x_clamped in self.x_to_index) and (y_clamped in self.y_to_index):
+            i = self.x_to_index[x_clamped]
+            j = self.y_to_index[y_clamped]
+            hv = self.corner_grid[i, j]
+        else:
+        '''
+        # If not found in cache, interpolate it and store it
+        hv = self._interpolate_hv(x_clamped, y_clamped)
+        self.position_hvs_cache[key] = hv  # Cache the interpolated result
+        return hv
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    '''
+           elif self.time_interpolation_method in [ "encode_temporalpermutation"]:
+               """Shifts an identity HV based on time (no caching)"""
+               base_hv = self.time_hvs[0]  # Get identity HV
+               return torchhd.permute(base_hv, shifts= int(time % self.time_subwindow))  # Shift based on time
+           elif self.time_interpolation_method in [ "thermometer" , "permutation"]:
+               return self.time_continious(time)
+
+       def time_continious(self, time):
+           """Continuous time encoding for thermometer or permutation."""
+           print(f"[DEBUG] time_continious({time}) called with method: {self.time_interpolation_method}")
+           if self.time_interpolation_method == "thermometer":
+               """The level increases with time."""
+               num_bins = len(self.time_hvs.keys())
+               scale = time / self.max_time  # Normalize to [0, 1]
+               level = int(scale * num_bins)  # Map to thermometer levels
+               thermometer_hv = torch.ones(self.dims, device=self.device) * -1
+               thermometer_hv[:level] = 1  # Activate increasing levels
+               print(f"[DEBUG] Returning Thermometer HV with shape: {thermometer_hv.shape}")
+               return thermometer_hv
+           elif self.time_interpolation_method == "permutation":
+               """Shifts the identity time vector based on time."""
+               base_hv = self.time_hvs.get(0, None)  # Get identity HV safely
+               if base_hv is None:
+                   print("[ERROR] time_hvs[0] is missing!")
+                   return torch.zeros(self.dims, device=self.device)  # Fallback
+               permuted_hv = torchhd.permute(base_hv, shifts=int(time % self.time_subwindow))  # Shift based on time
+               print(f"[DEBUG] Returning Permuted HV with shape: {permuted_hv.shape}")
+               return permuted_hv
+           else:  # Fallback to original
+               return self.get_time_hv(time)
+           '''
+
+    '''wrong.. concatination spatial.
     def _interpolate_hv(self, x, y):
         """Core interpolation logic."""
         # Clamp coordinates to grid bounds
@@ -218,12 +291,20 @@ class GraspHDseedEncoder:
         lambda_y = min(max((y_clamped - y0) / dy, 0.0), 1.0)  # Clamp between 0 and 1
 
         #print(f"  Weights: λ_x={lambda_x:.2f}, λ_y={lambda_y:.2f}")
+        print(f"\nInterpolating at ({x}, {y})")
+        print(f"  Clamped: x_clamped={x_clamped}, y_clamped={y_clamped}")
+        print(f"  Nearest Corners: P00=({x0}, {y0}), P10=({x1}, {y0}), P01=({x0}, {y1}), P11=({x1}, {y1})")
+        print(f"  λ_x={lambda_x:.4f}, λ_y={lambda_y:.4f}")
 
         # Compute segment sizes (global indices)
-        split_00 = round((1 - lambda_x) * (1 - lambda_y) * self.dims)
-        split_10 = round(lambda_x * (1 - lambda_y) * self.dims)
-        split_01 = round((1 - lambda_x) * lambda_y * self.dims)
-        split_11 = self.dims - (split_00 + split_10 + split_01)
+        #split_00 = round((1 - lambda_x) * (1 - lambda_y) * self.dims)
+        #split_10 = round(lambda_x * (1 - lambda_y) * self.dims)
+        #split_01 = round((1 - lambda_x) * lambda_y * self.dims)
+        #split_11 = self.dims - (split_00 + split_10 + split_01)
+        split_00 = int((1 - lambda_x) * (1 - lambda_y) * self.dims)
+        split_10 = int(lambda_x * (1 - lambda_y) * self.dims)
+        split_01 = int((1 - lambda_x) * lambda_y * self.dims)
+        split_11 = self.dims - (split_00 + split_10 + split_01)  # Force sum to self.dims
 
         # Ensure the sum of splits equals self.dims
         assert split_00 + split_10 + split_01 + split_11 == self.dims, "Split sizes do not sum to self.dims!"
@@ -233,13 +314,16 @@ class GraspHDseedEncoder:
         idx_10 = slice(split_00, split_00 + split_10)
         idx_01 = slice(split_00 + split_10, split_00 + split_10 + split_01)
         idx_11 = slice(split_00 + split_10 + split_01, self.dims)
-        '''
+
+
+
+        print(f"  Split Sizes -> 00: {split_00}, 10: {split_10}, 01: {split_01}, 11: {split_11}")
         print(f"  Global Indices:")
         print(f"    P00: {idx_00.start}-{idx_00.stop}")
         print(f"    P10: {idx_10.start}-{idx_10.stop}")
         print(f"    P01: {idx_01.start}-{idx_01.stop}")
         print(f"    P11: {idx_11.start}-{idx_11.stop}")
-        '''
+
         # Concatenate using global indices (same for all HVs)
         position_hv = torch.cat([
             P00[idx_00],
@@ -251,3 +335,4 @@ class GraspHDseedEncoder:
         assert position_hv.shape[0] == self.dims, f"Size mismatch! Expected {self.dims}, got {position_hv.shape[0]}"
         #print(f" HV size = {position_hv.shape[0]}")
         return position_hv
+    '''

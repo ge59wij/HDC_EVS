@@ -1,104 +1,169 @@
-from TrainValTest import *
-import torchhd.utils
-from BASE_HIST import HDHypervectorGenerators
-import numpy as np
-####qwe probbaly have to ignore event count 0, maybe unlike other all pixels have a value in the tensor.
 import torch
 import torchhd
 import numpy as np
+from collections import Counter
+from BASE_HIST import HDHypervectorGenerators
 
-'''Spatial Encoder (Per Bin):
-   ON/OFF events → Position-bound HVs
-   Temporal Encoder (Per Window):
-   n-Grams within window
-   Skip 404 bins
-   Sliding Window Generator:
-   window_size + overlap parameters'''
 
 class HISTEncoder:
-    def __init__(self, height, width, dims, device, threshold, window_size, n_gram):
+    def __init__(self, height, width, dims, device, window_size, n_gram,
+                 threshold=1 / 16, spatial_encoding="thermometer", levels=4, debug=True):
+        """
+        Encodes event data into hypervectors for HDC-based gesture recognition.
+
+        Args:
+            height (int): Image height
+            width (int): Image width
+            dims (int): Hypervector dimensionality
+            device (str): Computation device ('cpu' or 'cuda')
+            window_size (int): Number of bins per window
+            n_gram (int): Size of temporal n-grams
+            threshold (float): Event count threshold for noise filtering
+            spatial_encoding (str): Encoding method - "thermometer" or "linear"
+            levels (int): Number of levels for thermometer encoding
+            debug (bool): Enable debug prints
+        """
         self.height = height
         self.width = width
         self.dims = dims
         self.threshold = threshold
         self.device = torch.device(device)
-        self.window_size = window_size  # N-bins per encoding window
-        self.n_gram = n_gram  # temporal permutation
-        self.hv_gen = HDHypervectorGenerators(height, width, dims, device, threshold, window_size=window_size, n_gram=n_gram)
-        self.time_hvs = self.hv_gen.time_hvs
+        self.window_size = window_size
+        self.n_gram = n_gram
+        self.debug = debug
         self.BACKGROUND_LABEL = 404
 
+        # Create hypervector generator with selected encoding method
+        self.hv_gen = HDHypervectorGenerators(
+            height, width, dims, device, threshold,
+            window_size=window_size, n_gram=n_gram,
+            spatial_encoding=spatial_encoding, levels=levels, debug=debug
+        )
+        self.time_hvs = self.hv_gen.time_hvs
+
+        if debug:
+            print(f"Initialized HISTEncoder with {spatial_encoding} encoding")
+            print(f"Parameters: dims={dims}, window_size={window_size}, n_gram={n_gram}, threshold={threshold}")
 
     def encode_bin(self, bin_data, time_idx):
-        """Encodes bin with bundled ON/OFF before polarity binding"""
-        on_events = bin_data[0]
-        off_events = bin_data[1]
+        """
+        Encodes a single time bin with bundled ON/OFF events before polarity binding.
 
+        Args:
+            bin_data (torch.Tensor): Event data for a single bin [2, H, W]
+            time_idx (int): Time index within the window
 
-        # Bundle all ON/OFF positions before binding hmmmmmmm
-        on_pos_hv = torch.zeros(self.dims, device=self.device)
-        off_pos_hv = torch.zeros(self.dims, device=self.device)
-        #print(f"[DEBUG] Encoding bin at time index {time_idx}")
-        #print(
-        #    f"  - ON events count: {on_events.count_nonzero().item()}, OFF events count: {off_events.count_nonzero().item()}")
+        Returns:
+            torch.Tensor: Normalized hypervector for the bin
+        """
+        on_events = bin_data[0]  # ON polarity events
+        off_events = bin_data[1]  # OFF polarity events
 
+        # Find active ON event positions and bundle their hypervectors
+        #x_on = torch.where(on_events >= self.threshold)
         y_on, x_on = torch.where(on_events >= self.threshold)
-        #for x, y in zip(x_on, y_on):
-        #    print(f"[DEBUG] Event at: x={x}, y={y} (Shape={on_events.shape})")
 
-        for x, y in zip(x_on, y_on):
-            on_pos_hv = torchhd.bundle(on_pos_hv, self.hv_gen.get_pos_hv(x, y))
+        if len(x_on) > 0:
+            on_pos_hv = self.hv_gen.get_pos_hv(x_on[0], y_on[0])  # Start with first position HV
+            for x, y in zip(x_on[1:], y_on[1:]):  # Skip first, bundle rest
+                on_pos_hv = torchhd.bundle(on_pos_hv, self.hv_gen.get_pos_hv(x, y))
+        else:
+            on_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)  # Random HV if no ON events
 
+        # Find active OFF event positions and bundle their hypervectors
         y_off, x_off = torch.where(off_events >= self.threshold)
-        for x, y in zip(x_off, y_off):
-            off_pos_hv = torchhd.bundle(off_pos_hv, self.hv_gen.get_pos_hv(x, y))
+        if len(x_off) > 0:
+            off_pos_hv = self.hv_gen.get_pos_hv(x_off[0], y_off[0])  # Start with first position HV
+            for x, y in zip(x_off[1:], y_off[1:]):  # Skip first, bundle rest
+                off_pos_hv = torchhd.bundle(off_pos_hv, self.hv_gen.get_pos_hv(x, y))
+        else:
+            off_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(
+                0)  # Random HV if no OFF events
 
-        # Bind once per polarity
+        # Create event polarity hypervectors
         on_hv = torchhd.bind(on_pos_hv, self.hv_gen.H_I_on)
         off_hv = torchhd.bind(off_pos_hv, self.hv_gen.H_I_off)
-        #print(f"  - ON HV Bundled: {on_pos_hv.shape}, OFF HV Bundled: {off_pos_hv.shape}")
 
-        # Bundle polarities instead of binding
+        # Bundle ON and OFF polarity hypervectors
         bin_hv = torchhd.bundle(on_hv, off_hv)
-        encoded_bin = torchhd.bind(bin_hv, self.time_hvs[time_idx % self.n_gram])
-        #print(f"  - Final Encoded Bin HV: {bin_hv.shape}")
+
+        # Bind with time hypervector
+        #encoded_bin = torchhd.bind(bin_hv, self.time_hvs[time_idx % self.n_gram])
+        encoded_bin = torchhd.bind(bin_hv, torchhd.permute(self.time_hvs[0], shifts=time_idx))
+
+        if self.debug and (len(x_on) > 0 or len(x_off) > 0):
+            print(f"  [DEBUG BIN] Time {time_idx}: ON events: {len(x_on)}, OFF events: {len(x_off)}")
+
         return torchhd.normalize(encoded_bin)
 
     def encode_window(self, window_data, window_labels):
-        """Encodes a sliding window with separate gesture/background vectors"""
+        """
+        Encodes a sliding window of event data.
+        Skips background bins (label=404) and applies n-gram encoding.
+
+        Args:
+            window_data (torch.Tensor): Event data for window [T, 2, H, W]
+            window_labels (torch.Tensor): Labels for each bin in window
+
+        Returns:
+            torch.Tensor: Encoded hypervector for the window, or None if no valid gesture
+        """
+        # Extract valid gesture bins
         gesture_bins = []
-        #background_bins = []
+
+        # Track valid labels for debugging
+        valid_labels = []
 
         for idx, (bin_data, label) in enumerate(zip(window_data, window_labels)):
             if label == self.BACKGROUND_LABEL:
                 continue
 
             gesture_bins.append((bin_data, idx))
-        #print(f"[DEBUG] Encoding Window: {len(gesture_bins)} valid gesture bins found")
+            valid_labels.append(label.item())
 
+        if self.debug:
+            if len(gesture_bins) > 0:
+                label_counts = Counter(valid_labels)
+                print(f"[DEBUG WINDOW] Found {len(gesture_bins)} valid bins with labels: {dict(label_counts)}")
+            else:
+                print("[DEBUG WINDOW] No valid gesture bins found in window")
+
+        # Process valid gesture bins with n-grams
         gesture_hv = self._process_ngrams(gesture_bins)
-        #bg_hv = self._process_ngrams(background_bins)
-        #print(f"[DEBUG] Encoded Window HV: {gesture_hv.shape if gesture_hv is not None else 'None'}")
 
-        return gesture_hv  #, bg_hv
+        return gesture_hv
 
     def _process_ngrams(self, bins):
-        """Applies n-gram encoding, ensuring valid gesture bins are encoded."""
+        """
+        Applies n-gram encoding to temporal bins.
 
+        Args:
+            bins (list): List of (bin_data, time_idx) tuples
+
+        Returns:
+            torch.Tensor: Encoded hypervector for the ngrams, or None if invalid
+        """
         if len(bins) == 0:
-            return None  # **No valid gesture bins in window**
+            return None  # No valid gesture bins in window
+
+        # Check if we have enough bins for n-gram
+        if len(bins) < self.n_gram:
+            if self.debug:
+                print(f"[WARNING] Not enough bins for full n-gram (Need {self.n_gram}, got {len(bins)})")
+            return None  # Skip this window
 
         window_hv = torch.zeros(self.dims, device=self.device)
 
-        # **Apply n-gram encoding, handling edge cases**
-        if len(bins) < self.n_gram:
-            print(
-                f"[WARNING] Not enough bins for full n-gram (Needed {self.n_gram}, got {len(bins)}). Skipping these bins.")
-            return None  # Skip this window
-
+        # Apply n-gram encoding
         for i in range(len(bins) - self.n_gram + 1):
             gram = bins[i:i + self.n_gram]
+            # Encode each bin in the n-gram and combine with multibind
             gram_hv = torchhd.multibind(torch.stack([self.encode_bin(bin, idx) for bin, idx in gram]))
+            # Bundle the n-gram hypervector with the window hypervector
             window_hv = torchhd.bundle(window_hv, gram_hv)
 
+            if self.debug:
+                print(f"  [DEBUG NGRAM] Processing n-gram {i + 1}/{len(bins) - self.n_gram + 1}")
+
+        # Normalize the window hypervector if non-zero
         return torchhd.normalize(window_hv) if window_hv.norm() > 0 else None

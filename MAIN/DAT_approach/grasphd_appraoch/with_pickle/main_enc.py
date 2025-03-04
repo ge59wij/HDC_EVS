@@ -3,7 +3,7 @@ import torchhd
 import os
 import pickle
 from tqdm import tqdm
-from grasphdencoding import GraspHDEventEncoder
+from grasphdencoding import Raw_events_HDEncoder
 from torchhd.models import Centroid
 import random
 import torchmetrics
@@ -16,26 +16,53 @@ import time
 
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
+'''
+stem: Interpolation is done dimension-wise (not concatenation!) for spatial. for temp: STEMHD does use concatenation for  1D temporal interpolation.
+"A proportion (1 - α) of Tj is taken from the first vector and α from the next one. The two parts are concatenated to form the new time hypervector."
+> Explicitly states that concatenation is used.
 
+
+stem_hd:    spatial:  dimensionwise interpolation. weighted combination of neighboring hypervectors based on distance. same as eventhd, grasphd.
+            temporal: STEMHD does use concatenation for its 1D temporal interpolation.   ##########One per bin
+                        A proportion (1-alpha) of Tk is taken from first vector, and alpha from tj+1 from next one.
+                        concat together. 
+
+event_hd:   spatial:    uses weighted sum per element to interpolate positions.
+            temporal:   event_hd_timepermutation: Uses permutation-based encoding, time step is encoded using permutations of a base hypervector  for each t.
+                        eventhd_timeinterpolation:Uses weighted sum per element for interpolation (NOT concatenation).  Multiple—one per intermediate timestamp
+
+grasp_hd:   spatial:    weighted sum per dimension (similar to EventHD for time)
+            temporal:   Uses weighted sum per element to blend temporal hypervectors (same as EventHD time interpolation). Multiple—one per intermediate timestamp
+            same as eventhd timeineterpolation.
+
+STEMHD = Uses concatenation for time, not for space. in time: One per bin
+EventHD = Uses weighted sum for both space and time (no concatenation).
+GraspHD = Uses weighted sum for both space and time (no concatenation).
+
+'''
 
 TRAINING_METHOD = "adaptive"  # "centroid" "adaptive" "iterative"
 LEARNING_RATE = 0.5
-ENCODING_METHOD = GraspHDEventEncoder # xx
+ENCODING_METHOD = Raw_events_HDEncoder # xx
 
 
 
-TIME_INTERPOLATION_METHOD = "thermometer"  # "grasp_hd", "event_hd" , encode_temporalpermutation, thermometer, permutation,encode_temporalpermutation_weight
+
+
+                                                             #stem_hd
+TIME_INTERPOLATION_METHOD = "event_hd_timepermutation"   #event_hd_timeinterpolation" , encode_temporalpermutation,
+# thermometer, permutation,encode_temporalpermutation_weight
 
 def main():
     device = "cpu"
     print(f"Using device: {device}")
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
-    max_samples_train = 72
+    max_samples_train = 73
     max_samples_test = 4
-    DIMS = 6000
-    K = 50
-    Timewindow = 10_000
-    Train_split ="picked_samples"
+    DIMS = 4000
+    K = 5
+    Timewindow = 50_000
+    Train_split ="picked_samples"   #the good ones ig, similar event count, recheck and add more.
     save = True
 
     dataset_train = load_pickle_dataset(dataset_path, split=Train_split, max_samples=max_samples_train)
@@ -66,16 +93,26 @@ def main():
 
     for sample_id, (events, class_id) in tqdm(enumerate(dataset_train), total=len(dataset_train),
                                               desc="Encoding Train Samples"):
-        if TIME_INTERPOLATION_METHOD == "event_hd":
+
+        if TIME_INTERPOLATION_METHOD in ["event_hd_timepermutation", "event_hd_timeinterpolation"]:
             encoded_sample = encoder.encode_eventhd(events, class_id)
-        elif TIME_INTERPOLATION_METHOD == "grasp_hd":
-            encoded_sample = encoder.encode_grasphd(events, class_id)
-        elif TIME_INTERPOLATION_METHOD == "encode_temporalpermutation":
-            encoded_sample = encoder.encode_temporalpermutation(events, class_id)
-        elif TIME_INTERPOLATION_METHOD == "encode_accumulation_weight":
-            encoded_sample = encoder.encode_accumulation_weight(events, class_id)
-        elif TIME_INTERPOLATION_METHOD in [ "thermometer", "permutation"]:
-            encoded_sample = encoder.encode_accumulation(events, class_id)
+
+        elif TIME_INTERPOLATION_METHOD == "stem_hd":
+            encoded_sample = encoder.encode_xx(events, class_id)
+        else:
+            raise ValueError(f"Unknown TIME_INTERPOLATION_METHOD: {TIME_INTERPOLATION_METHOD}")
+
+
+        #elif TIME_INTERPOLATION_METHOD == "encode_temporalpermutation":
+        #    encoded_sample = encoder.encode_temporalpermutation(events, class_id)
+        #elif TIME_INTERPOLATION_METHOD == "encode_accumulation_weight":
+        #    encoded_sample = encoder.encode_accumulation_weight(events, class_id)
+        #elif TIME_INTERPOLATION_METHOD in [ "thermometer", "permutation"]:
+        #    encoded_sample = encoder.encode_accumulation(events, class_id)
+
+
+
+
         encoded_vectors.append(encoded_sample)
         class_labels.append(class_id)
 
@@ -86,7 +123,7 @@ def main():
     print(f"Encoded Matrix Stats - Min: {encoded_matrix.min()}, Max: {encoded_matrix.max()}")
 
     if save:
-        run_folder = create_unique_run_folder(base_path="/space/chair-nas/tosy/test_run/")
+        run_folder = create_unique_run_folder(base_path="/space/chair-nas/tosy/3.mars after fixes/test_run/")
         params = {
             "k": K, "Timewindow": Timewindow, "DIMS": DIMS, "max_samples_train": max_samples_train,
             "max_samples_test": max_samples_test, "Train_split": Train_split, "max_time": max_time,
@@ -144,6 +181,7 @@ def main():
 
 def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindow, K):
 
+    '''
     if TIME_INTERPOLATION_METHOD == "weighted_time":
         print("\n[DEBUG] Encoding First Sample")
         events, class_id = dataset[0]
@@ -174,16 +212,7 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
             similarity = torchhd.cosine_similarity(T_t1, T_t2).item()
             print(f"Time HV similarity (t={t1} vs. t={t2}): {similarity:.4f}")   #Time HVs Are Too Similar Across Consecutive Timestamps. cos=1! too many vectors inside one bin! 1microsecomd incrementation!
             #474,365 cached time hypervectors!!!!!!!!
-
-    if TIME_INTERPOLATION_METHOD == "grasp_hd":
-        # GraspHD needs increments of 0.5 bins
-        bin_keys = sorted(encoder.time_hvs.keys())  # Get all existing time bins (anchors & interpolated)
-        for i in range(len(bin_keys) - 1):
-            t1, t2 = bin_keys[i], bin_keys[i + 1]  # Compare adjacent bins (both anchors & interpolated)
-            T_t1 = encoder.get_time_hv(t1)
-            T_t2 = encoder.get_time_hv(t2)
-            similarity = torchhd.cosine_similarity(T_t1, T_t2).item()
-            print(f"Time HV similarity (t={t1} vs. t={t2}): {similarity:.4f}")
+        '''
 
     print("\n[DEBUG] Checking Similarity of Position Hypervectors")
 
@@ -196,7 +225,7 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
             P10 = encoder.get_position_hv(min(x + K, 640 - 1), y)  # Bottom-left corner
             P11 = encoder.get_position_hv(min(x + K, 640 - 1), min(y + K, 480 - 1))  # Bottom-right
 
-            # Choose three sample points inside the k-window
+            # Choose 3 sample points inside the k-window
             P_inside_1 = encoder.get_position_hv(x + K // 4, y + K // 4)  # Close to top-left
             P_inside_2 = encoder.get_position_hv(x + K // 2, y + K // 2)  # Dead center
             P_inside_3 = encoder.get_position_hv(x + 3 * K // 4, y + 3 * K // 4)  # Close to bottom-right
@@ -238,7 +267,6 @@ def save_pickle_file(run_folder, filename, data):
     with open(os.path.join(run_folder, filename), "wb") as f:
         pickle.dump(data, f)
         print(f" [SAVED] {filename} file saved")
-
 
 def save_plot(run_folder, filename):
     plt.gcf().canvas.draw()
