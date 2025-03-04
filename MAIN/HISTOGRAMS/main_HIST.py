@@ -22,17 +22,19 @@ LOGS_DIR = "/space/chair-nas/tosy/logs_encodings_histogram/"
 dataset_path = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/Bin Labeled/"
 Train_split = "VAL BIN LABELED"
 test_dataset = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/test/"
+NUM_TRAIN_METHODS = ["centroid", "adaptive", "iterative"]
+
+
 DIMS = 6000
-EVENT_THRESHOLD = 100
+EVENT_THRESHOLD = 100/16    #if below this, then counted as no gesture
 WINDOW_SIZE = 20
 NGRAM_SIZE = 7
 OVERLAP = 2
-NUM_TRAIN_METHODS = ["centroid", "adaptive", "iterative"]
 DEFAULT_HEATMAP_SAMPLES = 20
 THRESHOLD = 1 / 16
-
-SPATIAL_ENCODING = "linear"  # "thermometer" or "linear"
+method_encoding = "linear"  # "thermometer" or "linear" or "eventhd_timeinterpolation" "eventhd_timepermutation"
 THERMOMETER_LEVELS = 4
+K = 6
 
 def create_run_directory():
     """Creates a unique directory for each run and returns its path."""
@@ -601,6 +603,7 @@ def main(skip_training=True):
     random.seed(42)
     global test_dataset
     global run_dir
+    global K
     device = "cpu"
     print(f"Using device: {device}")
     print("\n[INFO] Loading datasets...")
@@ -622,8 +625,9 @@ def main(skip_training=True):
         "OVERLAP": OVERLAP,
         "NUM_TRAIN_METHODS": NUM_TRAIN_METHODS,
         "THRESHOLD": THRESHOLD,
-        "SPATIAL_ENCODING": SPATIAL_ENCODING,
+        "method_encoding": method_encoding,
         "THERMOMETER_LEVELS": THERMOMETER_LEVELS,
+        "K EVENTHD": K,
         "DEFAULT_HEATMAP_SAMPLES": DEFAULT_HEATMAP_SAMPLES,
     }
 
@@ -640,8 +644,9 @@ def main(skip_training=True):
         window_size=WINDOW_SIZE,
         n_gram=NGRAM_SIZE,
         threshold=THRESHOLD,
-        spatial_encoding=SPATIAL_ENCODING,
+        method_encoding=method_encoding,
         levels=THERMOMETER_LEVELS,
+        K=K,
         debug=DEBUG_MODE
     )
 
@@ -694,12 +699,12 @@ def main(skip_training=True):
 
 
 if __name__ == "__main__":
-    # Set default parameters
     DEBUG_MODE = False
     SPATIAL_ENCODING = "linear"
     THERMOMETER_LEVELS = 4
     DIMS = 6000
     THRESHOLD = 1 / 16
+    K=6
     DEFAULT_HEATMAP_SAMPLES = 30  # Maximum samples per class for similarity calculations
 
     main(skip_training=True)

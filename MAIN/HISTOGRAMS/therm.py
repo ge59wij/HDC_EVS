@@ -224,14 +224,14 @@ if __name__ == "__main__":
     print("\n[INFO] Thermometer Encoding Similarity")
     thermometer_hv_gen = HDHypervectorGenerators(
         height=120, width=160, dims=6000, device="cpu", threshold=1 / 16,
-        window_size=20, n_gram=7, spatial_encoding="thermometer", levels=25, debug=False
+        window_size=20, n_gram=7, method_encoding="thermometer", levels=25, debug=False
     )
     #plot_pixel_similarity(thermometer_hv_gen, title="Thermometer Encoding: Single Pixel Similarity")
 
     print("\n[INFO] Linear Encoding Similarity")
     linear_hv_gen = HDHypervectorGenerators(
         height=120, width=160, dims=10000, device="cpu", threshold=1 / 16,
-        window_size=20, n_gram=7, spatial_encoding="linear", levels=None, debug=False
+        window_size=20, n_gram=7, method_encoding="linear", levels=None, debug=False
     )
     #plot_pixel_similarity(linear_hv_gen, title="Linear Encoding: Single Pixel Similarity")
 

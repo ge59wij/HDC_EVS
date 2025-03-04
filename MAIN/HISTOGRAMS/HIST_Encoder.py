@@ -7,7 +7,7 @@ from BASE_HIST import HDHypervectorGenerators
 
 class HISTEncoder:
     def __init__(self, height, width, dims, device, window_size, n_gram,
-                 threshold=1 / 16, spatial_encoding="thermometer", levels=4, debug=True):
+                 threshold=1 / 16, method_encoding="thermometer", levels=4, K=6 ,debug=True):
         """
         Encodes event data into hypervectors for HDC-based gesture recognition.
 
@@ -31,18 +31,19 @@ class HISTEncoder:
         self.window_size = window_size
         self.n_gram = n_gram
         self.debug = debug
+        self.K = K
         self.BACKGROUND_LABEL = 404
 
         # Create hypervector generator with selected encoding method
         self.hv_gen = HDHypervectorGenerators(
             height, width, dims, device, threshold,
             window_size=window_size, n_gram=n_gram,
-            spatial_encoding=spatial_encoding, levels=levels, debug=debug
+            method_encoding=method_encoding, levels=levels, debug=debug
         )
         self.time_hvs = self.hv_gen.time_hvs
 
         if debug:
-            print(f"Initialized HISTEncoder with {spatial_encoding} encoding")
+            print(f"Initialized HISTEncoder with {method_encoding} encoding")
             print(f"Parameters: dims={dims}, window_size={window_size}, n_gram={n_gram}, threshold={threshold}")
 
     def encode_bin(self, bin_data, time_idx):
@@ -67,8 +68,8 @@ class HISTEncoder:
             on_pos_hv = self.hv_gen.get_pos_hv(x_on[0], y_on[0])  # Start with first position HV
             for x, y in zip(x_on[1:], y_on[1:]):  # Skip first, bundle rest
                 on_pos_hv = torchhd.bundle(on_pos_hv, self.hv_gen.get_pos_hv(x, y))
-        else:
-            on_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)  # Random HV if no ON events
+        #else:
+        #    on_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)  # Random HV if no ON events
 
         # Find active OFF event positions and bundle their hypervectors
         y_off, x_off = torch.where(off_events >= self.threshold)
@@ -76,9 +77,8 @@ class HISTEncoder:
             off_pos_hv = self.hv_gen.get_pos_hv(x_off[0], y_off[0])  # Start with first position HV
             for x, y in zip(x_off[1:], y_off[1:]):  # Skip first, bundle rest
                 off_pos_hv = torchhd.bundle(off_pos_hv, self.hv_gen.get_pos_hv(x, y))
-        else:
-            off_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(
-                0)  # Random HV if no OFF events
+        #else:
+        #    off_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)  # Random HV if no OFF events
 
         # Create event polarity hypervectors
         on_hv = torchhd.bind(on_pos_hv, self.hv_gen.H_I_on)
@@ -99,25 +99,21 @@ class HISTEncoder:
     def encode_window(self, window_data, window_labels):
         """
         Encodes a sliding window of event data.
-        Skips background bins (label=404) and applies n-gram encoding.
-
+        Skips background bins (label=404)
+            - Uses n-grams only for linear and thermometer.
+        - Uses direct permutation for eventhd_timepermutation.
         Args:
             window_data (torch.Tensor): Event data for window [T, 2, H, W]
             window_labels (torch.Tensor): Labels for each bin in window
-
         Returns:
-            torch.Tensor: Encoded hypervector for the window, or None if no valid gesture
+            torch.Tensor: Encoded hv for the window, or None if no valid gesture
         """
-        # Extract valid gesture bins
-        gesture_bins = []
-
-        # Track valid labels for debugging
-        valid_labels = []
+        gesture_bins = []         # Extract valid gesture bins
+        valid_labels = []         # Track valid labels for debugging
 
         for idx, (bin_data, label) in enumerate(zip(window_data, window_labels)):
             if label == self.BACKGROUND_LABEL:
-                continue
-
+                continue  # Skip background bins
             gesture_bins.append((bin_data, idx))
             valid_labels.append(label.item())
 
@@ -128,9 +124,20 @@ class HISTEncoder:
             else:
                 print("[DEBUG WINDOW] No valid gesture bins found in window")
 
-        # Process valid gesture bins with n-grams
-        gesture_hv = self._process_ngrams(gesture_bins)
+        if len(gesture_bins) == 0:
+            return None  # No valid gesture bins in this window
 
+        if self.hv_gen.method_encoding == "eventhd_timepermutation":   #skip n-grams if EventHD is selected
+            window_hv = torch.zeros(self.dims, device=self.device)
+            for bin_data, time_idx in gesture_bins:
+                bin_hv = self.encode_bin(bin_data, time_idx)
+                permuted_hv = torchhd.permute(bin_hv, shifts=time_idx)  # Apply permutation for time
+                window_hv = torchhd.bundle(window_hv, permuted_hv)
+            return torchhd.normalize(window_hv) if window_hv.norm() > 0 else None
+
+
+        # Process valid gesture bins with n-grams  **Linear & Thermometer
+        gesture_hv = self._process_ngrams(gesture_bins)
         return gesture_hv
 
     def _process_ngrams(self, bins):

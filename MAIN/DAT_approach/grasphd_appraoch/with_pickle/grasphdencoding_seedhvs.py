@@ -95,12 +95,6 @@ class seedEncoder:
             base_hv = self.time_hvs[0]
             return torchhd.permute(base_hv, shifts=int(time % self.time_subwindow))  # Shift based on time
 
-
-
-
-
-
-
     #-----------------Spatial-----------------------------------
 
     def _precompute_corners(self):

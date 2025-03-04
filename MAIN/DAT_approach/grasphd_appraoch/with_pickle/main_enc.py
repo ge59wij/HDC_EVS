@@ -47,7 +47,7 @@ ENCODING_METHOD = Raw_events_HDEncoder # xx
 
 
 
-
+#["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation"]:
 
                                                              #stem_hd
 TIME_INTERPOLATION_METHOD = "event_hd_timepermutation"   #event_hd_timeinterpolation" , encode_temporalpermutation,
@@ -58,7 +58,7 @@ def main():
     print(f"Using device: {device}")
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
     max_samples_train = 73
-    max_samples_test = 4
+    max_samples_test = 30
     DIMS = 4000
     K = 5
     Timewindow = 50_000
@@ -94,11 +94,9 @@ def main():
     for sample_id, (events, class_id) in tqdm(enumerate(dataset_train), total=len(dataset_train),
                                               desc="Encoding Train Samples"):
 
-        if TIME_INTERPOLATION_METHOD in ["event_hd_timepermutation", "event_hd_timeinterpolation"]:
+        if TIME_INTERPOLATION_METHOD in ["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation"]:
             encoded_sample = encoder.encode_eventhd(events, class_id)
 
-        elif TIME_INTERPOLATION_METHOD == "stem_hd":
-            encoded_sample = encoder.encode_xx(events, class_id)
         else:
             raise ValueError(f"Unknown TIME_INTERPOLATION_METHOD: {TIME_INTERPOLATION_METHOD}")
 
@@ -136,19 +134,19 @@ def main():
         run_folder = None
 
     #---------------------------Training--------------
-    '''
+    #'''
     label_tensor = torch.tensor(class_labels, dtype=torch.long, device=device)  # Keep labels as tensor
     model = train_model(encoded_matrix, label_tensor, DIMS, len(set(class_labels)), TRAINING_METHOD)
 
-
-    # **Train Centroid Classifier (Batch)**
+    '''
+     **Train Centroid Classifier (Batch)**
     model = Centroid(DIMS, len(set(class_labels)))
     with torch.no_grad():
         model.add(encoded_matrix, label_tensor)  # Batch adding instead of looping one by one
         model.normalize()
     '''
     #---------------------------Testing--------------
-    '''
+    #'''
 
     accuracy = torchmetrics.Accuracy("multiclass", num_classes=len(set(class_labels)))
     
@@ -156,8 +154,7 @@ def main():
 
     for sample_id, (events, class_id) in tqdm(enumerate(dataset_test), total=len(dataset_test),
                                               desc="Encoding Test Samples"):
-        encoded_sample = encoder.encode_eventhd(events, class_id) if TIME_INTERPOLATION_METHOD == "weighted_time" \
-            else encoder.encode_grasphd(events, class_id)
+        encoded_sample = encoder.encode_eventhd(events, class_id)
         encoded_test_vectors.append(encoded_sample)
         test_labels.append(class_id)
 
@@ -172,7 +169,7 @@ def main():
     print(f"Testing Accuracy: {(accuracy.compute().item() * 100):.3f}%")
     #plot_with_parameters(encoded_test_matrix, test_labels, K ,Timewindow, DIMS ,max_samples_train, ENCODING_METHOD)
 
-    '''
+    #'''
 
     plot_with_parameters(encoded_matrix, class_labels, K, Timewindow, DIMS, max_samples_train,
                          TIME_INTERPOLATION_METHOD, save, run_folder)
