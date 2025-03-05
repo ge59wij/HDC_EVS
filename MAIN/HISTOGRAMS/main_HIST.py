@@ -26,7 +26,7 @@ NUM_TRAIN_METHODS = ["centroid", "adaptive", "iterative"]
 
 
 DIMS = 4000
-EVENT_THRESHOLD = 100/16    #if below this, then counted as no gesture #for bin labeling in the test data and encoding
+EVENT_THRESHOLD = 100/16    # if below this, then counted as no gesture #for bin labeling in the test data and encoding
 WINDOW_SIZE = 50
 NGRAM_SIZE = 4
 OVERLAP = 2
@@ -34,7 +34,7 @@ DEFAULT_HEATMAP_SAMPLES = 20
 method_encoding = "thermometer"  # "thermometer" or "linear" or "eventhd_timeinterpolation" "eventhd_timepermutation"
 THERMOMETER_LEVELS = 4
 K = 50
-
+## one more param in encoder for stemhd and interpolation event hd
 def create_run_directory():
     """Creates a unique directory for each run and returns its path."""
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

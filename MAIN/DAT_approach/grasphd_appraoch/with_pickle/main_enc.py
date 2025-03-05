@@ -213,7 +213,7 @@ def print_debug(TIME_INTERPOLATION_METHOD, dataset, encoder, max_time, Timewindo
 
     print("\n[DEBUG] Checking Similarity of Position Hypervectors")
 
-    # Iterate over the first few k-windows
+    # Iterate over the first few  k-windows
     for x in range(0, 3 * K, K):
         for y in range(0, K + 1, K):
             # Define key points inside the window

@@ -1,6 +1,5 @@
 import torch
 import torchhd
-import numpy as np
 from collections import Counter
 from BASE_HIST import HDHypervectorGenerators
 
@@ -204,5 +203,7 @@ class HISTEncoder:
             if self.debug:
                 print(f"  [DEBUG NGRAM] Processing n-gram {i + 1}/{len(bins) - self.n_gram + 1}")
 
-        # Normalize the window hypervector if non-zero
-        return torchhd.normalize(window_hv) if window_hv.norm() > 0 else None
+        if window_hv.norm() > 0:
+            torchhd.normalize(window_hv)
+
+        return window_hv

@@ -221,7 +221,7 @@ class HDHypervectorGenerators:
         Retrieves time hypervector based on selected interpolation method.
         Supports:
         - **EventHD time interpolation** (weighted sum) per bin
-        - **STEMHD time interpolation** (concatenation-based), one vector per anchor bin
+        - **STEMHD time interpolation** (concatenation-based), one vector between 2 anchor bins
         """
         if self.method_encoding == "eventhd_timepermutation":
             return torchhd.permute(self.base_time_HV, shifts=bin_id)
