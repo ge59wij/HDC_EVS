@@ -124,7 +124,7 @@ def plot_all_pixel_similarity(hv_gen, title="Cosine Similarity of All Pixels"):
     dims = hv_gen.dims
 
     # Generate hypervectors for all pixel positions
-    num_pixels = height * width  # Expected number of positions
+    num_pixels = height * width  # Expected number of  positions
     hv_grid = torch.zeros((num_pixels, dims), device=hv_gen.device)
 
     print(f"[DEBUG] Expected grid shape: ({height}, {width}), Total pixels: {num_pixels}")
