@@ -50,7 +50,7 @@ ENCODING_METHOD = Raw_events_HDEncoder # xx
 #["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation"]:
 
                                                              #stem_hd
-TIME_INTERPOLATION_METHOD = "event_hd_timepermutation"   #event_hd_timeinterpolation" , encode_temporalpermutation,
+TIME_INTERPOLATION_METHOD = "stem_hd"   #event_hd_timeinterpolation" , encode_temporalpermutation,
 # thermometer, permutation,encode_temporalpermutation_weight
 
 def main():
@@ -61,7 +61,7 @@ def main():
     max_samples_test = 30
     DIMS = 4000
     K = 5
-    Timewindow = 50_000
+    Timewindow = 10_000
     Train_split ="picked_samples"   #the good ones ig, similar event count, recheck and add more.
     save = True
 

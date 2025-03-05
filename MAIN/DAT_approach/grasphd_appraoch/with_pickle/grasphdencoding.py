@@ -24,7 +24,7 @@ class Raw_events_HDEncoder(seedEncoder):
         """
         print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
 
-        H_spatiotemporal = None  # Final encoding
+        H_spatiotemporal = None  #  Final encoding
         temporal_dict = {}  # Dictionary to accumulate spatial encodings per timestamp
 
         # **Step 1: Compute Spatial Encoding Per Event and Accumulate per Time**

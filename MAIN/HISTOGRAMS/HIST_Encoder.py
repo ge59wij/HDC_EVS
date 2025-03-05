@@ -32,6 +32,7 @@ class HISTEncoder:
         self.n_gram = n_gram
         self.debug = debug
         self.K = K
+        self.method_encoding = method_encoding
         self.BACKGROUND_LABEL = 404
 
         # Create hypervector generator with selected encoding method
@@ -57,39 +58,65 @@ class HISTEncoder:
         Returns:
             torch.Tensor: Normalized hypervector for the bin
         """
-        on_events = bin_data[0]  # ON polarity events
-        off_events = bin_data[1]  # OFF polarity events
+        on_events = bin_data[1]  # ON polarity events
+        off_events = bin_data[0]  # OFF polarity events
 
-        # Find active ON event positions and bundle their hypervectors
-        #x_on = torch.where(on_events >= self.threshold)
-        y_on, x_on = torch.where(on_events >= self.threshold)
+        if self.method_encoding in ["thermometer", "linear"]:
+            y_on, x_on = torch.where(on_events >= self.threshold)
+            if len(x_on) > 0:
+                on_pos_hv = self.hv_gen.get_pos_hv(x_on[0], y_on[0])  # Start with first position HV
+                for x, y in zip(x_on[1:], y_on[1:]):  # Skip first, bundle rest
+                    on_pos_hv = torchhd.bundle(on_pos_hv, self.hv_gen.get_pos_hv(x, y))
+            else:
+                on_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
 
-        if len(x_on) > 0:
-            on_pos_hv = self.hv_gen.get_pos_hv(x_on[0], y_on[0])  # Start with first position HV
-            for x, y in zip(x_on[1:], y_on[1:]):  # Skip first, bundle rest
-                on_pos_hv = torchhd.bundle(on_pos_hv, self.hv_gen.get_pos_hv(x, y))
-        #else:
-        #    on_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)  # Random HV if no ON events
+            y_off, x_off = torch.where(off_events >= self.threshold)
+            if len(x_off) > 0:
+                off_pos_hv = self.hv_gen.get_pos_hv(x_off[0], y_off[0])
+                for x, y in zip(x_off[1:], y_off[1:]):  # Skip first, bundle rest
+                    off_pos_hv = torchhd.bundle(off_pos_hv, self.hv_gen.get_pos_hv(x, y))
+            else:
+                off_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
 
-        # Find active OFF event positions and bundle their hypervectors
-        y_off, x_off = torch.where(off_events >= self.threshold)
-        if len(x_off) > 0:
-            off_pos_hv = self.hv_gen.get_pos_hv(x_off[0], y_off[0])  # Start with first position HV
-            for x, y in zip(x_off[1:], y_off[1:]):  # Skip first, bundle rest
-                off_pos_hv = torchhd.bundle(off_pos_hv, self.hv_gen.get_pos_hv(x, y))
-        #else:
-        #    off_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)  # Random HV if no OFF events
+            # Create event polarity hypervectors
+            on_hv = torchhd.bind(on_pos_hv, self.hv_gen.H_I_on)
+            off_hv = torchhd.bind(off_pos_hv, self.hv_gen.H_I_off)
+            encoded_bin = torchhd.bundle(on_hv, off_hv)  # Bundle ON & OFF
 
-        # Create event polarity hypervectors
-        on_hv = torchhd.bind(on_pos_hv, self.hv_gen.H_I_on)
-        off_hv = torchhd.bind(off_pos_hv, self.hv_gen.H_I_off)
+        elif self.method_encoding in ["eventhd_timepermutation", "eventhd_timeinterpolation"]:
+            temporal_dict = {}  # Dictionary to accumulate spatial encodings per time bin
+            #print(f"[DEBUG TIME] Bin {time_idx}: Time HV = {self.hv_gen.get_time_hv(time_idx)[:10]}")
 
-        # Bundle ON and OFF polarity hypervectors
-        bin_hv = torchhd.bundle(on_hv, off_hv)
+            y_on, x_on = torch.where(on_events >= self.threshold)
+            for x, y in zip(x_on, y_on):
+                P_xy = self.hv_gen.get_pos_hv(x, y)  # Get **position HV** (KxK grid)
+                H_polarity = self.hv_gen.H_I_on
+                H_spatial = torchhd.bind(P_xy, H_polarity)  # Bind with polarity
 
-        # Bind with time hypervector
-        #encoded_bin = torchhd.bind(bin_hv, self.time_hvs[time_idx % self.n_gram])
-        encoded_bin = torchhd.bind(bin_hv, torchhd.permute(self.time_hvs[0], shifts=time_idx))
+                if time_idx not in temporal_dict:
+                    temporal_dict[time_idx] = H_spatial
+                else:
+                    temporal_dict[time_idx] = torchhd.bundle(temporal_dict[time_idx], H_spatial)
+            y_off, x_off = torch.where(off_events >= self.threshold)
+            for x, y in zip(x_off, y_off):
+                P_xy = self.hv_gen.get_pos_hv(x, y)  # Get **position HV** (KxK grid)
+                H_polarity = self.hv_gen.H_I_off
+                H_spatial = torchhd.bind(P_xy, H_polarity)  # Bind with polarity
+
+                if time_idx not in temporal_dict:
+                    temporal_dict[time_idx] = H_spatial
+                else:
+                    temporal_dict[time_idx] = torchhd.bundle(temporal_dict[time_idx], H_spatial)
+
+            # Bind accumulated spatial encoding with time hypervector
+            bin_hv = temporal_dict[time_idx]
+
+            if self.method_encoding == "eventhd_timepermutation":
+                encoded_bin = torchhd.bind(bin_hv, torchhd.permute(self.hv_gen.base_time_HV, shifts=time_idx))
+            elif self.method_encoding == "eventhd_timeinterpolation":
+                encoded_bin = torchhd.bind(bin_hv, self.hv_gen.get_time_hv(time_idx))
+            else:
+                raise ValueError(f"Unsupported time encoding method: {self.method_encoding}")
 
         if self.debug and (len(x_on) > 0 or len(x_off) > 0):
             print(f"  [DEBUG BIN] Time {time_idx}: ON events: {len(x_on)}, OFF events: {len(x_off)}")
@@ -114,6 +141,7 @@ class HISTEncoder:
         for idx, (bin_data, label) in enumerate(zip(window_data, window_labels)):
             if label == self.BACKGROUND_LABEL:
                 continue  # Skip background bins
+
             gesture_bins.append((bin_data, idx))
             valid_labels.append(label.item())
 
@@ -127,12 +155,16 @@ class HISTEncoder:
         if len(gesture_bins) == 0:
             return None  # No valid gesture bins in this window
 
-        if self.hv_gen.method_encoding == "eventhd_timepermutation":   #skip n-grams if EventHD is selected
+        if self.hv_gen.method_encoding in [ "eventhd_timepermutation", "eventhd_timeinterpolation"]:   #skip n-grams if EventHD is selected
             window_hv = torch.zeros(self.dims, device=self.device)
             for bin_data, time_idx in gesture_bins:
                 bin_hv = self.encode_bin(bin_data, time_idx)
-                permuted_hv = torchhd.permute(bin_hv, shifts=time_idx)  # Apply permutation for time
-                window_hv = torchhd.bundle(window_hv, permuted_hv)
+                if self.method_encoding == "eventhd_timepermutation":
+                    permuted_hv = torchhd.permute(bin_hv, shifts=time_idx)  # Apply permutation for time
+                    window_hv = torchhd.bundle(window_hv, permuted_hv)
+                elif self.method_encoding == "eventhd_timeinterpolation":
+                    window_hv = torchhd.bundle(window_hv, bin_hv)
+
             return torchhd.normalize(window_hv) if window_hv.norm() > 0 else None
 
 

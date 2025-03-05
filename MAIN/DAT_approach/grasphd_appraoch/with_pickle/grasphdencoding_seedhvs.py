@@ -151,7 +151,6 @@ class seedEncoder:
         P01 = self.corner_grid[self.x_to_index[x0], self.y_to_index[y1]]
         P11 = self.corner_grid[self.x_to_index[x1], self.y_to_index[y1]]
 
-        # Compute interpolation weights
         dx = max(x1 - x0, 1e-9)
         dy = max(y1 - y0, 1e-9)
         lambda_x = (x_clamped - x0) / dx  # Weight for x-direction

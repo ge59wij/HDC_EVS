@@ -24,6 +24,7 @@ class HDHypervectorGenerators:
             debug (bool): Enable debug prints
         """
         self.BACKGROUND_LABEL = 404
+        self.step_size = 5    ##### anchor steps for eventhdtimeinterpolation and stemhd.
         if debug:
             print(f"Initializing Hypervector Generator with {method_encoding} encoding...")
 
@@ -59,6 +60,7 @@ class HDHypervectorGenerators:
         ##time:
         if method_encoding == "eventhd_timepermutation":
             self.base_time_HV = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
+            self.time_hvs = None  # Still define it, but we won't use it
         else:
             # Generate Temporal Hypervectors (same for thermometer and linear methods)
             self.time_hvs = self._generate_time_hvs(self.window_size)
@@ -70,6 +72,8 @@ class HDHypervectorGenerators:
             if method_encoding == "linear":
                 print(f"[DEBUG] Cached {self.pixel_hvs.shape[0] * self.pixel_hvs.shape[1]} Pixel HVs")
 
+
+########################spatial#######################
     def _generate_linear_axis_hvs(self, size):
         """
         Generates position HVs using linear mapping, ensuring similarity between nearby positions.
@@ -137,13 +141,6 @@ class HDHypervectorGenerators:
 
         print(f"| Cached {len(self.corner_x_positions) * len(self.corner_y_positions)} corner hypervectors.")
 
-    def _generate_time_hvs(self, n_bins):
-        """
-        Generates N hypervectors for the time bins inside a window.
-        Each time step is a permutation of a base hypervector.
-        """
-        base_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
-        return torch.stack([torchhd.permute(base_hv, shifts=i) for i in range(n_bins)])
 
     def get_pos_hv(self, x, y):
         """
@@ -210,9 +207,54 @@ class HDHypervectorGenerators:
         # Cache and return the computed hypervector
         self.position_hvs_cache[(x, y)] = interpolated_hv
         return interpolated_hv
+###########################################################time#####
+    def _generate_time_hvs(self, n_bins):
+        """
+        Generates N hypervectors for the time bins inside a window.
+        Each time step is a permutation of a base hypervector.
+        """
+        base_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
+        return torch.stack([torchhd.permute(base_hv, shifts=i) for i in range(n_bins)])
+
     def get_time_hv(self, bin_id):
         """
-        Retrieves temporal hypervector for a given time bin."""
+        Retrieves time hypervector based on selected interpolation method.
+        Supports:
+        - **EventHD time interpolation** (weighted sum) per bin
+        - **STEMHD time interpolation** (concatenation-based), one vector per anchor bin
+        """
         if self.method_encoding == "eventhd_timepermutation":
             return torchhd.permute(self.base_time_HV, shifts=bin_id)
-        return self.time_hvs[min(bin_id, self.window_size - 1)]
+
+        elif self.method_encoding in ["eventhd_timeinterpolation", "stem_hd"]:
+            # If the time HV already exists, return it
+            if bin_id in self.time_hvs:
+                return self.time_hvs[bin_id]
+            if self.time_hvs is None:
+                raise ValueError("Time HVs were not initialized properly. Check method_encoding settings.")
+
+            # Step-size based anchors
+            step_size = max(self.window_size // self.step_size, 1)  # Default 5 anchors, adjust as needed ####################
+            prev_anchor = (bin_id // step_size) * step_size
+            next_anchor = min(prev_anchor + step_size, self.window_size - 1)
+
+            # Get anchor hypervectors
+            T_prev = self.time_hvs[prev_anchor]
+            T_next = self.time_hvs[next_anchor]
+
+            alpha = (bin_id - prev_anchor) / (next_anchor - prev_anchor + 1e-9)
+
+            if self.method_encoding == "stem_hd":
+                # STEMHD: Concatenation-based interpolation temporally, spatial same.(one interpolated vector per anchor pair)
+                num_from_T_prev = int((1 - alpha) * self.dims)
+                num_from_T_next = self.dims - num_from_T_prev
+                interpolated_hv = torch.cat((T_prev[:num_from_T_prev], T_next[-num_from_T_next:]), dim=0)
+            else:
+                # EventHD Time Interpolation: Weighted sum
+                interpolated_hv = (1 - alpha) * T_prev + alpha * T_next
+
+            # Store the interpolated hypervector
+            self.time_hvs[bin_id] = interpolated_hv
+            return interpolated_hv
+
+
