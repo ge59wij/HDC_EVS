@@ -33,7 +33,7 @@ OVERLAP = 2
 DEFAULT_HEATMAP_SAMPLES = 20
 method_encoding = "thermometer"  # "thermometer" or "linear" or "eventhd_timeinterpolation" "eventhd_timepermutation"
 THERMOMETER_LEVELS = 4
-K = 50
+K = 5
 ## one more param in encoder for stemhd and interpolation event hd
 def create_run_directory():
     """Creates a unique directory for each run and returns its path."""

@@ -4,7 +4,7 @@ import numpy as np
 np.set_printoptions(suppress=True, precision=8)
 
 class seedEncoder:
-    def __init__(self, height, width, dims, time_subwindow, k, device, max_time, time_interpolation_method):
+    def __init__(self, height, width, dims, k,time_subwindow,  device, max_time, time_interpolation_method, WINDOW_SIZE_MS, OVERLAP_MS):
         print("Initializing Seed Encoder:")
         self.height = height
         self.width = width
@@ -12,8 +12,10 @@ class seedEncoder:
         self.time_subwindow = time_subwindow
         self.k = k
         self.device = torch.device(device) if isinstance(device, str) else device
-        self.max_time = max_time
+        self.max_time = WINDOW_SIZE_MS
         self.time_interpolation_method = time_interpolation_method
+        self.WINDOW_SIZE_MS = WINDOW_SIZE_MS
+        self.OVERLAP_MS = OVERLAP_MS
 
         self.H_I_on = torchhd.random(1, dims, "MAP", device=self.device).squeeze(0)
         self.H_I_off = -self.H_I_on
@@ -77,23 +79,24 @@ class seedEncoder:
             print(f"| Using Temporal Permutation Encoding | Base Identity Vector Initialized")
         '''
 
+    def get_time_hv(self, t):
+        """Retrieves time hypervector using a local windowed timestamp (ensuring every window starts at t=0)."""
+        if not (0 <= t < self.WINDOW_SIZE_MS):
+            raise ValueError(f"[ERROR] Event timestamp {t} out of range (0-{self.WINDOW_SIZE_MS})")
 
-    def get_time_hv(self, time):
-        """Retrieves time hypervector based on selected interpolation method."""
+        if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation"]:
+            if t in self.time_hvs:
+                return self.time_hvs[t]
 
-        if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation"]:     # dont call grasp hd, same as eventhd interpo
-            if time in self.time_hvs:
-                return self.time_hvs[time]
-
-            # Find the closest available time hypervector
-            closest_key = min(self.time_hvs.keys(), key=lambda k: abs(k - time))
-            print(f"[WARNING] Requested time {time} not found! Using closest available: {closest_key}")
+            # Find the closest available key within the current window
+            closest_key = min(self.time_hvs.keys(), key=lambda k: abs(k - t))
+            print(f"[WARNING] Requested time {t} not found! Using closest available: {closest_key}")
             return self.time_hvs[closest_key]
 
         elif self.time_interpolation_method == "event_hd_timepermutation":
-            """Shift an identity HV based on time"""
+            """Shift an identity HV based on a **window-local** timestamp"""
             base_hv = self.time_hvs[0]
-            return torchhd.permute(base_hv, shifts=int(time % self.time_subwindow))  # Shift based on time
+            return torchhd.permute(base_hv, shifts=int(t % self.time_subwindow))  # Shift based on time
 
     #-----------------Spatial-----------------------------------
 
@@ -214,7 +217,7 @@ class seedEncoder:
 
 
 
-    '''
+'''
            elif self.time_interpolation_method in [ "encode_temporalpermutation"]:
                """Shifts an identity HV based on time (no caching)"""
                base_hv = self.time_hvs[0]  # Get identity HV
@@ -247,7 +250,7 @@ class seedEncoder:
                return self.get_time_hv(time)
            '''
 
-    '''wrong.. concatination spatial.
+'''wrong.. concatination spatial.
     def _interpolate_hv(self, x, y):
         """Core interpolation logic."""
         # Clamp coordinates to grid bounds
@@ -328,4 +331,4 @@ class seedEncoder:
         assert position_hv.shape[0] == self.dims, f"Size mismatch! Expected {self.dims}, got {position_hv.shape[0]}"
         #print(f" HV size = {position_hv.shape[0]}")
         return position_hv
-    '''
+'''

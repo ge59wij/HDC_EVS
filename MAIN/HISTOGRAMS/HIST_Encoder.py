@@ -62,12 +62,13 @@ class HISTEncoder:
 
         if self.method_encoding in ["thermometer", "linear"]:
             y_on, x_on = torch.where(on_events >= self.threshold)
+
             if len(x_on) > 0:
                 on_pos_hv = self.hv_gen.get_pos_hv(x_on[0], y_on[0])  # Start with first position HV
                 for x, y in zip(x_on[1:], y_on[1:]):  # Skip first, bundle rest
                     on_pos_hv = torchhd.bundle(on_pos_hv, self.hv_gen.get_pos_hv(x, y))
             else:
-                on_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
+                on_pos_hv = torchhd.identity(1, self.dims, "MAP", device=self.device).squeeze(0)
 
             y_off, x_off = torch.where(off_events >= self.threshold)
             if len(x_off) > 0:
@@ -75,7 +76,7 @@ class HISTEncoder:
                 for x, y in zip(x_off[1:], y_off[1:]):  # Skip first, bundle rest
                     off_pos_hv = torchhd.bundle(off_pos_hv, self.hv_gen.get_pos_hv(x, y))
             else:
-                off_pos_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
+                off_pos_hv = torchhd.identity(1, self.dims, "MAP", device=self.device).squeeze(0)
 
             # Create event polarity hypervectors
             on_hv = torchhd.bind(on_pos_hv, self.hv_gen.H_I_on)

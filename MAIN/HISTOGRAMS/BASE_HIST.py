@@ -1,6 +1,8 @@
 import torch
 import torchhd
 import numpy as np
+os.environ["OMP_NUM_THREADS"] = "4"
+torch.set_num_threads(4)
 
 np.set_printoptions(suppress=True, precision=8)
 class HDHypervectorGenerators:
@@ -256,5 +258,3 @@ class HDHypervectorGenerators:
             # Store the interpolated hypervector
             self.time_hvs[bin_id] = interpolated_hv
             return interpolated_hv
-
-
