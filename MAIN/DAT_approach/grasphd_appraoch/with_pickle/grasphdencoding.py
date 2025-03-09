@@ -33,8 +33,8 @@ class Raw_events_HDEncoder(seedEncoder):
             P_xy = self.get_position_hv(x, y)  # Fetch position hypervector
             I_p = self.H_I_on if polarity == 1 else self.H_I_off  # Fetch polarity hypervector
             H_spatial = torchhd.bind(P_xy, I_p)  # Bind position and polarity
-
-            temporal_dict[t] = torchhd.bundle(temporal_dict[t], H_spatial)  # Accumulate spatial encoding
+            torchhd.normalize(H_spatial)
+            temporal_dict[t] = torchhd.normalize(torchhd.bundle(temporal_dict[t], H_spatial))  # Accumulate spatial encoding
 
         # **Step 2: Bind Each Timestamp’s Accumulated Spatial Encoding with its Time Hypervector**
         for t, H_spatial_accumulated in temporal_dict.items():
@@ -48,7 +48,8 @@ class Raw_events_HDEncoder(seedEncoder):
                 H_timebin = torchhd.bind(H_spatial_accumulated, T_t)
 
             # **Step 3: Accumulate Time-Encoded Hypervectors Across All Time Bins**
-            H_spatiotemporal = H_timebin if H_spatiotemporal is None else torchhd.bundle(H_spatiotemporal, H_timebin)
+            H_spatiotemporal = H_timebin if H_spatiotemporal is None \
+                else torchhd.normalize(torchhd.bundle(H_spatiotemporal, H_timebin))
 
         if H_spatiotemporal is not None:
             H_spatiotemporal = torchhd.normalize(H_spatiotemporal)

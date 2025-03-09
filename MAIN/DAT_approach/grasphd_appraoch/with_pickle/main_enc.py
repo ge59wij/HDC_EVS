@@ -58,14 +58,14 @@ def main():
 
     # ------------------------ Experiment Parameters ------------------------
     dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
-    max_samples_train, max_samples_test = 100, 10
-    DIMS, K, Timewindow = 8000, 4, 10_000
-    WINDOW_SIZE_MS, OVERLAP_MS, time_skipped = 500_000, 10_000, 10_000
+    max_samples_train, max_samples_test = 200, 30
+    DIMS, K, Timewindow = 6000, 4, 30_000
+    WINDOW_SIZE_MS, OVERLAP_MS, time_skipped = 100_000, 10_000, 10_000
     Train_split, save = "train", True
 
     # ------------------------ Load & Preprocess Dataset ------------------------
     dataset_train = load_and_shift_dataset(dataset_path, Train_split, max_samples_train, time_skipped)
-    dataset_test = load_and_shift_dataset(dataset_path, "picked_samples", max_samples_test, time_skipped)
+    dataset_test = load_and_shift_dataset(dataset_path, "test", max_samples_test, time_skipped)
     max_time = WINDOW_SIZE_MS
     print(f"[INFO] Using max_time = {max_time}")
 
