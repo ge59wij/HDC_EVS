@@ -2,7 +2,6 @@ import torch
 import torchhd
 from MAIN.DAT_approach.grasphd_appraoch.with_pickle.grasphdencoding_seedhvs import seedEncoder
 import numpy as np
-from collections import defaultdict
 
 
 from collections import defaultdict

@@ -15,6 +15,8 @@ from sklearn.manifold import TSNE
 import torchmetrics
 import datetime
 import json
+import resource
+resource.setrlimit(resource.RLIMIT_AS, (2_000_000_000, 2_000_000_000))  # 2GB limit
 
 BACKGROUND_LABEL = 404
 LOGS_DIR = "/space/chair-nas/tosy/logs_encodings_histogram/"
@@ -26,14 +28,14 @@ NUM_TRAIN_METHODS = ["centroid", "adaptive", "iterative"]
 
 
 DEBUG_MODE = False
-K = 6
+K = 8
 DEFAULT_HEATMAP_SAMPLES = 30  # Maximum samples per class for similarity calculations
-DIMS = 6000  ##at least 500 for permuation/thermometer
-EVENT_THRESHOLD = 1/ 16  # if below this, then counted as no gesture #for bin labeling in the test data and encoding
+DIMS = 4000  ##at least 500 for permuation/thermometer
+EVENT_THRESHOLD = 0 / 16  # if below this, then counted as no gesture #for bin labeling in the test data and encoding
 WINDOW_SIZE = 100
 NGRAM_SIZE = 10
 OVERLAP = 2
-method_encoding = "thermometer"  # "thermometer" or "linear" or "eventhd_timeinterpolation" "eventhd_timepermutation"
+method_encoding = "eventhd_timepermutation"  # "thermometer" or "linear" or "eventhd_timeinterpolation" "eventhd_timepermutation"
 
 
 def create_run_directory():

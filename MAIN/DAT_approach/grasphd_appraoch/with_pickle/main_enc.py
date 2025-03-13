@@ -14,10 +14,15 @@ from sklearn.manifold import TSNE
 import numpy as np
 import tonic
 import time
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
 os.environ["OMP_NUM_THREADS"] = "8"
 torch.set_num_threads(8)
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
+import resource
+resource.setrlimit(resource.RLIMIT_AS, (2_000_000_000, 2_000_000_000))  # 2GB limit
+
 '''
 stem: Interpolation is done dimension-wise (not concatenation!) for spatial. for temp: STEMHD does use concatenation for  1D temporal interpolation.
 "A proportion (1 - α) of Tj is taken from the first vector and α from the next one. The two parts are concatenated to form the new time hypervector."
@@ -45,11 +50,13 @@ GraspHD = Uses weighted sum for both space and time (no concatenation).
 
 
 # -------------------------------- Hyperparameters --------------------------------
-TRAINING_METHOD = "centroid"  # "centroid" "adaptive" "iterative"
+TRAINING_METHOD = "centroid"  # "centroid" "adaptive"
 LEARNING_RATE = 0.5
 ENCODING_METHOD = Raw_events_HDEncoder
 #["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation"]:
 TIME_INTERPOLATION_METHOD = "event_hd_timepermutation"
+
+
 # thermometer, permutation,encode_temporalpermutation_weight
 
 
@@ -67,16 +74,17 @@ def main():
         height = 480
         width = 640
 
-    max_samples_train, max_samples_test = 20, 9
+    max_samples_train, max_samples_test = 30, 20
 
-    DIMS, K, Timewindow = 4000, 5 , 50_000
-    WINDOW_SIZE_MS, OVERLAP_MS, time_skipped = 600_000, 0, 0
+    DIMS, K, Timewindow = 4000, 5 , 30_000
+
+    WINDOW_SIZE_MS, OVERLAP_MS= 400_000, 0
 
     save =True
 
     # ------------------------ Load & Preprocess Dataset ------------------------
-    dataset_train = load_and_shift_dataset(dataset_path, "Train", max_samples_train, time_skipped, dataset_name)
-    dataset_test = load_and_shift_dataset(dataset_path, "Test", max_samples_test, time_skipped,dataset_name)
+    dataset_train = load__dataset(dataset_path, "picked_samples", max_samples_train, dataset_name)
+    dataset_test = load__dataset(dataset_path, "Test", max_samples_test, dataset_name)
     max_time = WINDOW_SIZE_MS
     print(f"[INFO] Using max_time = {max_time}")
 
@@ -100,9 +108,9 @@ def main():
             "Test_samples": len(dataset_test), "Method": TIME_INTERPOLATION_METHOD
         })
 
-    # ------------------------ Train & Test ----------------------
+    # ------------------------ Train & Test ------------------------
     model = train_model(encoded_train, labels_train, DIMS, len(set(labels_train)), TRAINING_METHOD)
-    accuracy = _test_model(model, encoded_test, labels_test)
+    accuracy, preds = _test_model(model, encoded_test, labels_test)  # Now returns preds too
     print(f"Testing Accuracy: {accuracy:.3f}%")
 
     plot_heatmap(encoded_train, labels_train, K, Timewindow, DIMS, max_samples_train, TIME_INTERPOLATION_METHOD, save,
@@ -115,7 +123,10 @@ def main():
     plot_tsne(encoded_test, labels_test, K, Timewindow, DIMS, max_samples_test, TIME_INTERPOLATION_METHOD, save,
               run_folder, "test")
 
-def load_and_shift_dataset(dataset_path, split, max_samples, time_skipped, dataset_name):
+    plot_confusion_matrix(labels_test, preds, save, run_folder, "test")
+
+
+def load__dataset(dataset_path, split, max_samples, dataset_name):
     """
     Loads dataset based on dataset_name.
     - Chifoumi (pickle files) -> loads & shifts timestamps.
@@ -170,39 +181,47 @@ def train_model(encoded_matrix, labels, dims, num_classes, method):
     model.normalize()
     return model
 
+
 def _test_model(model, encoded_test, test_labels):
     accuracy = torchmetrics.Accuracy("multiclass", num_classes=len(set(test_labels)))
     with torch.no_grad():
         output = model(encoded_test)
+        preds = torch.argmax(output, dim=1)  # Get predicted class labels
         accuracy.update(output, torch.tensor(test_labels, dtype=torch.long))
-    return accuracy.compute().item() * 100
+
+    acc = accuracy.compute().item() * 100
+    return acc, preds.tolist()  # Return accuracy and predictions
 
 
 def plot_heatmap(vectors, labels, k, Timewindow, dims, max_samples, encodingmethod, save, run_folder, split_name):
-    """Plots and saves cosine similarity heatmap for sorted vectors (limits to 30 samples)."""
+    """Plots and saves cosine similarity heatmap with equal class representation."""
     class_labels_tensor = torch.tensor(labels)
-    sorted_indices = torch.argsort(class_labels_tensor)
 
-    # Sort vectors and labels
-    sorted_vectors = vectors[sorted_indices]
-    sorted_labels = class_labels_tensor[sorted_indices].tolist()
+    # Ensure balanced representation: Select 4 samples per class (or max available)
+    unique_classes = list(set(labels))
+    selected_indices = []
+    for cls in unique_classes:
+        indices = (class_labels_tensor == cls).nonzero(as_tuple=True)[0]
+        selected_indices.extend(indices[:4])  # Take first 4 samples (if available)
 
-    # Limit to 30 samples
-    sorted_vectors = sorted_vectors[:30]
-    sorted_labels = sorted_labels[:30]
+    # Sort the selected indices for better organization
+    selected_indices = torch.tensor(sorted(selected_indices))  # Ensure sorted order
+    selected_vectors = vectors[selected_indices]
+    selected_labels = class_labels_tensor[selected_indices].tolist()
 
     # Compute cosine similarity
-    similarity_matrix = torchhd.functional.cosine_similarity(sorted_vectors, sorted_vectors).cpu().numpy()
+    similarity_matrix = torchhd.functional.cosine_similarity(selected_vectors, selected_vectors).cpu().numpy()
 
     # Plot heatmap
     plt.figure(figsize=(12, 10))
     sns.heatmap(
         similarity_matrix, annot=True, fmt=".2f", cmap="coolwarm",
-        xticklabels=sorted_labels, yticklabels=sorted_labels,
+        xticklabels=selected_labels, yticklabels=selected_labels,
         cbar=True, square=True, linewidths=0.5, annot_kws={"size": 7}
     )
 
-    plt.title(f"Cosine Similarity Heatmap ({split_name}) | {encodingmethod} (k={k}, dims={dims}, timewindow={Timewindow})")
+    plt.title(
+        f"Cosine Similarity Heatmap ({split_name}) | {encodingmethod} (k={k}, dims={dims}, timewindow={Timewindow})")
     plt.xlabel("Sample Index (Class ID)")
     plt.ylabel("Sample Index (Class ID)")
 
@@ -239,6 +258,22 @@ def plot_tsne(encoded_vectors, class_labels, k, Timewindow, dims, max_samples, e
     # Save plot
     if save and run_folder:
         save_plot(run_folder, f"{split_name}_tsne.png")
+    plt.close()
+
+
+def plot_confusion_matrix(true_labels, pred_labels, save, run_folder, split_name):
+    """Generates a confusion matrix to visualize classification performance."""
+    cm = confusion_matrix(true_labels, pred_labels)
+
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=range(len(set(true_labels))), yticklabels=range(len(set(true_labels))))
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.title(f"Confusion Matrix ({split_name})")
+
+    # Save plot
+    if save and run_folder:
+        save_plot(run_folder, f"{split_name}_confusion_matrix.png")
     plt.close()
 
 

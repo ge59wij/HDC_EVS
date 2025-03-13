@@ -151,7 +151,7 @@ class HDHypervectorGenerators:
 
 
         elif self.method_encoding == "eventhd_timepermutation":
-            key = (x, y)
+            key = (x, y)        #### this should be delted, old method.
             if key in self.position_hvs_cache:
                 return self.position_hvs_cache[key]
             interpolated_hv = self._interpolate_eventhd(x, y)
