@@ -21,7 +21,7 @@ torch.set_num_threads(8)
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
 import resource
-resource.setrlimit(resource.RLIMIT_AS, (2_000_000_000, 2_000_000_000))  # 2GB limit
+resource.setrlimit(resource.RLIMIT_AS, (10_000_000_000, 10_000_000_000))  # 2GB limit
 
 '''
 stem: Interpolation is done dimension-wise (not concatenation!) for spatial. for temp: STEMHD does use concatenation for  1D temporal interpolation.
@@ -54,7 +54,7 @@ TRAINING_METHOD = "centroid"  # "centroid" "adaptive"
 LEARNING_RATE = 0.5
 ENCODING_METHOD = Raw_events_HDEncoder
 #["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation"]:
-TIME_INTERPOLATION_METHOD = "event_hd_timepermutation"
+TIME_INTERPOLATION_METHOD = "event_hd_timeinterpolation"
 
 
 # thermometer, permutation,encode_temporalpermutation_weight
@@ -66,24 +66,25 @@ def main():
     height, width = 34, 34
 
     # ------------------------ Parameters ------------------------
-    dataset_name = "chifoumi"  # chifoumi
+    dataset_name = "nmnist"  # chifoumi
     dataset_path = "/space/chair-nas/tosy/data/"
 
     if dataset_name == "chifoumi":
         dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
         height = 480
         width = 640
+        #picked_samples
 
-    max_samples_train, max_samples_test = 30, 20
+    max_samples_train, max_samples_test = 1,2
 
     DIMS, K, Timewindow = 4000, 5 , 30_000
 
-    WINDOW_SIZE_MS, OVERLAP_MS= 400_000, 0
+    WINDOW_SIZE_MS, OVERLAP_MS= 400_000, 10_000
 
     save =True
 
     # ------------------------ Load & Preprocess Dataset ------------------------
-    dataset_train = load__dataset(dataset_path, "picked_samples", max_samples_train, dataset_name)
+    dataset_train = load__dataset(dataset_path, "Train", max_samples_train, dataset_name)
     dataset_test = load__dataset(dataset_path, "Test", max_samples_test, dataset_name)
     max_time = WINDOW_SIZE_MS
     print(f"[INFO] Using max_time = {max_time}")
