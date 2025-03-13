@@ -12,9 +12,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.manifold import TSNE
 import numpy as np
+import tonic
 import time
-os.environ["OMP_NUM_THREADS"] = "4"
-torch.set_num_threads(4)
+os.environ["OMP_NUM_THREADS"] = "8"
+torch.set_num_threads(8)
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
 '''
@@ -44,41 +45,50 @@ GraspHD = Uses weighted sum for both space and time (no concatenation).
 
 
 # -------------------------------- Hyperparameters --------------------------------
-TRAINING_METHOD = "adaptive"  # "centroid" "adaptive" "iterative"
+TRAINING_METHOD = "centroid"  # "centroid" "adaptive" "iterative"
 LEARNING_RATE = 0.5
 ENCODING_METHOD = Raw_events_HDEncoder
 #["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation"]:
-TIME_INTERPOLATION_METHOD = "event_hd_timeinterpolation"
+TIME_INTERPOLATION_METHOD = "event_hd_timepermutation"
 # thermometer, permutation,encode_temporalpermutation_weight
 
 
 def main():
     device = "cpu"
     print(f"Using device: {device}")
+    height, width = 34, 34
 
-    # ------------------------ Experiment Parameters ------------------------
-    dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
-    max_samples_train, max_samples_test = 200, 30
-    DIMS, K, Timewindow = 6000, 4, 30_000
-    WINDOW_SIZE_MS, OVERLAP_MS, time_skipped = 100_000, 10_000, 10_000
-    Train_split, save = "train", True
+    # ------------------------ Parameters ------------------------
+    dataset_name = "chifoumi"  # chifoumi
+    dataset_path = "/space/chair-nas/tosy/data/"
+
+    if dataset_name == "chifoumi":
+        dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
+        height = 480
+        width = 640
+
+    max_samples_train, max_samples_test = 20, 9
+
+    DIMS, K, Timewindow = 4000, 5 , 50_000
+    WINDOW_SIZE_MS, OVERLAP_MS, time_skipped = 600_000, 0, 0
+
+    save =True
 
     # ------------------------ Load & Preprocess Dataset ------------------------
-    dataset_train = load_and_shift_dataset(dataset_path, Train_split, max_samples_train, time_skipped)
-    dataset_test = load_and_shift_dataset(dataset_path, "test", max_samples_test, time_skipped)
+    dataset_train = load_and_shift_dataset(dataset_path, "Train", max_samples_train, time_skipped, dataset_name)
+    dataset_test = load_and_shift_dataset(dataset_path, "Test", max_samples_test, time_skipped,dataset_name)
     max_time = WINDOW_SIZE_MS
     print(f"[INFO] Using max_time = {max_time}")
 
-    # ------------------------ INIT Encoder ------------------------
     encoder = Raw_events_HDEncoder(
-        height=480, width=640, dims=DIMS, time_subwindow=Timewindow, k=K, device=device,
+        height=height, width=width, dims=DIMS, time_subwindow=Timewindow, k=K, device=device,
         max_time=max_time, time_method=TIME_INTERPOLATION_METHOD,
         WINDOW_SIZE_MS=WINDOW_SIZE_MS, OVERLAP_MS=OVERLAP_MS
     )
 
     # ------------------------ Encode Train & Test Data ------------------------
-    encoded_train, labels_train = encode_dataset(dataset_train, encoder, Train_split)
-    encoded_test, labels_test = encode_dataset(dataset_test, encoder, "test")
+    encoded_train, labels_train = encode_dataset(dataset_train, encoder, split_name="Train")
+    encoded_test, labels_test = encode_dataset(dataset_test, encoder, split_name="Test")
 
     # ------------------------ Save Data ------------------------
     run_folder = create_unique_run_folder("/space/chair-nas/tosy/3.mars_after_fixes/test_run/") if save else None
@@ -105,18 +115,47 @@ def main():
     plot_tsne(encoded_test, labels_test, K, Timewindow, DIMS, max_samples_test, TIME_INTERPOLATION_METHOD, save,
               run_folder, "test")
 
+def load_and_shift_dataset(dataset_path, split, max_samples, time_skipped, dataset_name):
+    """
+    Loads dataset based on dataset_name.
+    - Chifoumi (pickle files) -> loads & shifts timestamps.
+    - NMNIST (Tonic) -> loads exactly `max_samples` per digit (0-9) using Tonic's API.
+    """
+    if dataset_name == "chifoumi":
+        dataset = load_pickle_dataset(dataset_path, split, max_samples)
+        return dataset
 
-def load_and_shift_dataset(dataset_path, split, max_samples, time_skipped):
-    dataset = load_pickle_dataset(dataset_path, split, max_samples)
-    return [(shift_events(events, time_skipped), class_id) for events, class_id in dataset]
+    elif dataset_name == "nmnist":
+        dataset = tonic.datasets.NMNIST(save_to=dataset_path, train=(split == "train"))
+        dataset_list = []
+        dtype = np.dtype([("t", np.int64), ("x", np.int16), ("y", np.int16), ("p", np.int8)])
 
-def shift_events(events, time_skipped):
-    return [(t - time_skipped, x, y, p) for t, x, y, p in events if t >= time_skipped]
+        # Store counts per digit class
+        class_counts = {i: 0 for i in range(10)}
+
+        for i in range(len(dataset)):
+            events, class_id = dataset[i]  # Get (events, label) directly from Tonic
+
+            # Ensure we don't exceed max_samples per class
+            if class_counts[class_id] < max_samples:
+                structured_events = np.array([(t, x, y, p) for x, y, t, p in events], dtype=dtype)
+                dataset_list.append((structured_events, class_id))
+                class_counts[class_id] += 1
+
+            # Stop early if we have enough samples for all digits
+            if all(count >= max_samples for count in class_counts.values()):
+                break
+
+        print(f"Loaded {len(dataset_list)} NMNIST samples for {split} split.")
+        return dataset_list
+
+    else:
+        raise ValueError("Unknown dataset! Choose 'chifoumi' or 'nmnist'.")
 
 def encode_dataset(dataset, encoder, split_name):
     encoded_vectors, class_labels = [], []
     for events, class_id in tqdm(dataset, desc=f"Encoding {split_name} Samples"):
-        encoded_windows = encoder.process_windows(events, class_id)
+        encoded_windows = encoder.process_windows(events, class_id)     ####
         encoded_vectors.extend(encoded_windows)
         class_labels.extend([class_id] * len(encoded_windows))
     return torch.stack(encoded_vectors), class_labels

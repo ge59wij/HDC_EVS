@@ -1,13 +1,17 @@
 import torch
 import torchhd
 import numpy as np
+import os
+
 os.environ["OMP_NUM_THREADS"] = "4"
 torch.set_num_threads(4)
 
 np.set_printoptions(suppress=True, precision=8)
+
+
 class HDHypervectorGenerators:
     def __init__(self, height, width, dims, device, threshold, window_size, n_gram,
-                 method_encoding="thermometer", levels=4, K = 6, debug=True):
+                 method_encoding="thermometer", K=6, debug=True):
         """
         Generates base hypervectors for HDC encoding with selectable encoding methods.
         thermometer, linear, eventhd.
@@ -26,7 +30,7 @@ class HDHypervectorGenerators:
             debug (bool): Enable debug prints
         """
         self.BACKGROUND_LABEL = 404
-        self.step_size = 5    ##### anchor steps for eventhdtimeinterpolation and stemhd.
+        self.step_size = 5  ##### anchor steps for eventhdtimeinterpolation and stemhd.
         if debug:
             print(f"Initializing Hypervector Generator with {method_encoding} encoding...")
 
@@ -54,9 +58,13 @@ class HDHypervectorGenerators:
             self.pixel_hvs = torch.zeros((height, width, dims), device=self.device)
             self._generate_pixel_hvs()
         elif method_encoding == "thermometer":
-            self.HV_x = self._generate_thermometer_axis_hvs(self.width, levels)
-            self.HV_y = self._generate_thermometer_axis_hvs(self.height, levels)
-        elif method_encoding in [ "eventhd_timepermutation", "eventhd_timetinterpolation" ]:
+            self.HV_x = torchhd.thermometer(self.width, self.dims, "MAP")
+            self.HV_y = torchhd.thermometer(self.height, self.dims, "MAP")
+            self.pixel_hvs = torch.zeros((height, width, dims), device=self.device)
+            self._generate_pixel_hvs()
+
+
+        elif method_encoding in ["eventhd_timepermutation", "eventhd_timetinterpolation"]:
             self._precompute_eventhd_positions()
 
         ##time:
@@ -74,14 +82,13 @@ class HDHypervectorGenerators:
             if method_encoding == "linear":
                 print(f"[DEBUG] Cached {self.pixel_hvs.shape[0] * self.pixel_hvs.shape[1]} Pixel HVs")
 
-
-########################spatial#######################
+    ########################spatial#######################
     def _generate_linear_axis_hvs(self, size):
         """
         Generates position HVs using linear mapping, ensuring similarity between nearby positions.
         Each position flips a small number of bits from the previous position's HV.
         """
-        flip_bits = self.dims // (4 * (size - 1)) #flip_bits = self.dims // (4 * (size - 1))
+        flip_bits = self.dims // (4 * (size - 1))  # flip_bits = self.dims // (4 * (size - 1))
         base_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
         hvs = [base_hv.clone()]
 
@@ -93,20 +100,7 @@ class HDHypervectorGenerators:
 
         return torch.stack(hvs)
 
-    def _generate_thermometer_axis_hvs(self, size, levels=4):
-        """
-        Creates continuous position HVs using thermometer encoding.
-        Uses multiple permutation levels for gradual variation.
-        Nearby positions share more permutation levels -> higher similarity.
-        """
-        base = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
-        hvs = [base]
 
-        for lvl in range(1, levels):
-            permuted = torchhd.permute(hvs[-1], shifts=lvl)
-            hvs.append(torchhd.bundle(hvs[-1], permuted))  # Combine increasing shifts
-
-        return [hvs[min(int(pos / size * levels), levels - 1)] for pos in range(size)]
 
     def _generate_pixel_hvs(self):
         """Generates and caches hypervectors for each pixel (x, y) for linear encoding."""
@@ -115,7 +109,7 @@ class HDHypervectorGenerators:
                 self.pixel_hvs[y, x] = torchhd.bind(self.HV_x[x], self.HV_y[y])
 
     def _precompute_eventhd_positions(self):
-        """Precomputes position HVs using EventHD's k×k interpolation method and caches results."""
+        """Precomputes position HVs using EventHD's k�k interpolation method and caches results."""
         self.corner_x_positions = list(range(0, self.width, self.K))
         self.corner_y_positions = list(range(0, self.height, self.K))
 
@@ -143,17 +137,19 @@ class HDHypervectorGenerators:
 
         print(f"| Cached {len(self.corner_x_positions) * len(self.corner_y_positions)} corner hypervectors.")
 
-
     def get_pos_hv(self, x, y):
         """
         Retrieves spatial hypervector for a given (x, y) position.
         Uses cached values for linear encoding, computes on-the-fly for thermometer.
         for eventhd: If position exists, fetch it. Otherwise, interpolate once, cache it, and return.
         """
-        if self.method_encoding == "linear":
-            return self.pixel_hvs[y, x]
-        elif self.method_encoding == "thermometer":
-            return torchhd.bind(self.HV_x[x], self.HV_y[y])
+        if self.method_encoding in ["linear", "thermometer"]:
+            # Ensure x and y are Python integers
+            x_idx = int(x.item()) if torch.is_tensor(x) else int(x)
+            y_idx = int(y.item()) if torch.is_tensor(y) else int(y)
+            return self.pixel_hvs[y_idx, x_idx]
+
+
         elif self.method_encoding == "eventhd_timepermutation":
             key = (x, y)
             if key in self.position_hvs_cache:
@@ -165,8 +161,8 @@ class HDHypervectorGenerators:
     def _interpolate_eventhd(self, x, y):
         """
         Interpolates hypervectors using EventHD's weighted sum method.
-        - Uses `np.searchsorted()` to find the correct corners.
-        - Fetches from `self.corner_grid` for efficiency.
+        - Uses np.searchsorted() to find the correct corners.
+        - Fetches from self.corner_grid for efficiency.
         - Ensures numerical stability in weight computation.
         - Caches interpolated hypervectors.
         """
@@ -209,14 +205,19 @@ class HDHypervectorGenerators:
         # Cache and return the computed hypervector
         self.position_hvs_cache[(x, y)] = interpolated_hv
         return interpolated_hv
-###########################################################time#####
+
+    ###########################################################time#####
     def _generate_time_hvs(self, n_bins):
         """
         Generates N hypervectors for the time bins inside a window.
-        Each time step is a permutation of a base hypervector.
+        Each time step is a permutation of a base hypervector. ####fot thermomter snd eventhd permutation.
         """
-        base_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
-        return torch.stack([torchhd.permute(base_hv, shifts=i) for i in range(n_bins)])
+        if self.method_encoding == "linear":
+            base_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
+            ###############re think shift size, now its 1 per iteration, not great!
+            return torch.stack([torchhd.permute(base_hv, shifts=i * 90) for i in range(n_bins)])
+        else:
+            return torchhd.thermometer(self.n_gram,self.dims,"MAP")
 
     def get_time_hv(self, bin_id):
         """
@@ -236,7 +237,8 @@ class HDHypervectorGenerators:
                 raise ValueError("Time HVs were not initialized properly. Check method_encoding settings.")
 
             # Step-size based anchors
-            step_size = max(self.window_size // self.step_size, 1)  # Default 5 anchors, adjust as needed ####################
+            step_size = max(self.window_size // self.step_size,
+                            1)  # Default 5 anchors, adjust as needed ####################
             prev_anchor = (bin_id // step_size) * step_size
             next_anchor = min(prev_anchor + step_size, self.window_size - 1)
 
@@ -258,3 +260,4 @@ class HDHypervectorGenerators:
             # Store the interpolated hypervector
             self.time_hvs[bin_id] = interpolated_hv
             return interpolated_hv
+

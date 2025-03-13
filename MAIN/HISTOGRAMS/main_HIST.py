@@ -16,7 +16,6 @@ import torchmetrics
 import datetime
 import json
 
-
 BACKGROUND_LABEL = 404
 LOGS_DIR = "/space/chair-nas/tosy/logs_encodings_histogram/"
 dataset_path = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/Bin Labeled/"
@@ -25,16 +24,18 @@ test_dataset = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/test/"
 NUM_TRAIN_METHODS = ["centroid", "adaptive", "iterative"]
 
 
-DIMS = 4000
-EVENT_THRESHOLD = 100/16    # if below this, then counted as no gesture #for bin labeling in the test data and encoding
-WINDOW_SIZE = 50
-NGRAM_SIZE = 4
+
+DEBUG_MODE = False
+K = 6
+DEFAULT_HEATMAP_SAMPLES = 30  # Maximum samples per class for similarity calculations
+DIMS = 6000  ##at least 500 for permuation/thermometer
+EVENT_THRESHOLD = 1/ 16  # if below this, then counted as no gesture #for bin labeling in the test data and encoding
+WINDOW_SIZE = 100
+NGRAM_SIZE = 10
 OVERLAP = 2
-DEFAULT_HEATMAP_SAMPLES = 20
 method_encoding = "thermometer"  # "thermometer" or "linear" or "eventhd_timeinterpolation" "eventhd_timepermutation"
-THERMOMETER_LEVELS = 4
-K = 5
-## one more param in encoder for stemhd and interpolation event hd
+
+
 def create_run_directory():
     """Creates a unique directory for each run and returns its path."""
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -57,15 +58,13 @@ def bin_labeling(files):
             labeled_files.append(file)
     print("[INFO] Test dataset labeling complete!")
     return labeled_files
-
 def load_dataset(dataset_folder, is_test=False, max_test_samples=30):
     """Loads dataset and applies bin labeling if test."""
     files = [os.path.join(dataset_folder, f) for f in os.listdir(dataset_folder) if f.endswith('.h5')]
     if is_test:
         files = bin_labeling(files[:max_test_samples])
     return files
-
-def process_sample(event_data, class_ids, encoder, sample_name="", debug=False):
+def process_sample(event_data, class_ids, encoder, sample_name, debug):
     """
     Encodes event data into hypervectors using sliding windows.
 
@@ -122,7 +121,6 @@ def process_sample(event_data, class_ids, encoder, sample_name="", debug=False):
         print(f"[SAMPLE] Created {len(gesture_hvs)} encoded windows")
 
     return gesture_hvs if gesture_hvs else [(torch.zeros(encoder.dims), -1)]
-
 def save_run_info(run_dir, params, metrics, results):
     """Saves run parameters and final results in the given run directory."""
     filename = os.path.join(run_dir, "run_info.json")
@@ -150,8 +148,7 @@ class HDF5Dataset(Dataset):
             event_data = torch.tensor(f["data"][:], dtype=torch.float32)
             class_ids = torch.tensor(f["labels"][:], dtype=torch.int32)
         return event_data, class_ids, file_path
-
-def encode_dataset(dataloader, encoder, debug=False):
+def encode_dataset(dataloader, encoder, debug):
     """
     Encodes the entire dataset before training.
 
@@ -193,9 +190,7 @@ def encode_dataset(dataloader, encoder, debug=False):
         raise ValueError("No valid hypervectors were generated from the dataset")
 
     return torch.stack(encoded_vectors), class_labels
-
-
-def train_model(encoded_vectors, class_labels, method, debug=False):
+def train_model(encoded_vectors, class_labels, method, debug):
     """Trains a model using different methods."""
     unique_classes = sorted(list(set(class_labels)))
     num_classes = len(unique_classes)
@@ -596,17 +591,17 @@ def compute_additional_metrics(vectors, labels, run_dir, sample_limit=DEFAULT_HE
         f"    - Average inter-class: {np.mean([pairwise_cosine_matrix[i, j] for i in range(num_classes) for j in range(num_classes) if i != j]):.3f}")
 
 
-def main(skip_training=True):
-    torch.manual_seed(42)
-    np.random.seed(42)
-    random.seed(42)
+def main(skip_training):
+    torch.manual_seed(40)
+    np.random.seed(40)
+    random.seed(40)
     global test_dataset
-    global run_dir
-    global K
+
     device = "cpu"
     print(f"Using device: {device}")
     print("\n[INFO] Loading datasets...")
     train_files = load_dataset(dataset_path + Train_split)
+
     if not skip_training:
         test_files = load_dataset(test_dataset, is_test=True, max_test_samples=30)
         print(f"[INFO] Loaded {len(train_files)} training files and {len(test_files)} test files")
@@ -624,7 +619,6 @@ def main(skip_training=True):
         "OVERLAP": OVERLAP,
         "NUM_TRAIN_METHODS": NUM_TRAIN_METHODS,
         "method_encoding": method_encoding,
-        "THERMOMETER_LEVELS": THERMOMETER_LEVELS,
         "K EVENTHD": K,
         "DEFAULT_HEATMAP_SAMPLES": DEFAULT_HEATMAP_SAMPLES,
     }
@@ -643,7 +637,6 @@ def main(skip_training=True):
         n_gram=NGRAM_SIZE,
         threshold=EVENT_THRESHOLD,
         method_encoding=method_encoding,
-        levels=THERMOMETER_LEVELS,
         K=K,
         debug=DEBUG_MODE
     )
@@ -697,12 +690,4 @@ def main(skip_training=True):
 
 
 if __name__ == "__main__":
-    DEBUG_MODE = False
-    SPATIAL_ENCODING = "linear"
-    THERMOMETER_LEVELS = 4
-    DIMS = 6000
-    EVENT_THRESHOLD = 1 / 16
-    K=6
-    DEFAULT_HEATMAP_SAMPLES = 30  # Maximum samples per class for similarity calculations
-
-    main(skip_training=True)
+    main(skip_training=False)

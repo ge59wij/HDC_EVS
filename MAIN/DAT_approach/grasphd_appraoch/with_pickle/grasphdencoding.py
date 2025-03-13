@@ -4,6 +4,9 @@ from MAIN.DAT_approach.grasphd_appraoch.with_pickle.grasphdencoding_seedhvs impo
 import numpy as np
 from collections import defaultdict
 
+
+from collections import defaultdict
+
 np.set_printoptions(suppress=True, precision=8)
 
 
@@ -12,114 +15,149 @@ class Raw_events_HDEncoder(seedEncoder):
         super().__init__(height, width, dims, k, time_subwindow , device, max_time, time_method,WINDOW_SIZE_MS, OVERLAP_MS )
         self.time_hv_cache = {}
 
-
-
-    # 1 loop
     def encode_eventhd(self, events, class_id):
-        """Encodes events using EventHD or STEMHD method (controlled via `time_interpolation_method`).
-        - **Spatial encoding**: Interpolates position HVs.
-        - **Temporal encoding**:
-        - `event_hd_timepermutation`: Uses permutation-based encoding (shifts base HV).
-        - `event_hd_timeinterpolation`: Uses weighted sum per element for time interpolation.
-        - `stem_hd`: Uses concatenation-based interpolation (one HV per bin).
+        """Encodes events using different time encoding methods:
+        - **event_hd_timepermutation** → Applies permutation-based encoding (shifts spatial hypervector itself).
+        - **event_hd_timeinterpolation** → Uses weighted sum per element for time interpolation.
+        - **stem_hd** → Uses concatenation-based interpolation (one HV per bin).
         """
         print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
 
-        H_spatiotemporal = None  #  Final encoding
-        temporal_dict = defaultdict(lambda: torchhd.identity(1, dimensions=self.dims).squeeze(0))
+        H_spatiotemporal = None  # Final encoding
+        #temporal_dict = {}  # Stores spatial hypervectors per timestamp
+        temporal_dict = defaultdict(list)
+        TIME_BIN_SIZE = self.time_subwindow  # used directly for eventhd permutation
 
-        # **Step 1: Compute Spatial Encoding Per Event and Accumulate per Time**
+
+        # **Step 1: Compute Spatial Encoding Per Event and Accumulate per Time Bin**
         for t, x, y, polarity in events:
             P_xy = self.get_position_hv(x, y)  # Fetch position hypervector
             I_p = self.H_I_on if polarity == 1 else self.H_I_off  # Fetch polarity hypervector
             H_spatial = torchhd.bind(P_xy, I_p)  # Bind position and polarity
-            torchhd.normalize(H_spatial)
-            temporal_dict[t] = torchhd.normalize(torchhd.bundle(temporal_dict[t], H_spatial))  # Accumulate spatial encoding
+            #torchhd.normalize(H_spatial)
+            time_bin = int((t // TIME_BIN_SIZE) * TIME_BIN_SIZE)  # Ensure integer bin key
 
-        # **Step 2: Bind Each Timestamp’s Accumulated Spatial Encoding with its Time Hypervector**
-        for t, H_spatial_accumulated in temporal_dict.items():
-            T_t = self.get_time_hv(t)  # Get time hypervector for this timestamp
+            # Append spatial encodings for this bin (don't bundle yet)
+            temporal_dict[time_bin].append(H_spatial)
 
-            if self.time_interpolation_method == "stem_hd":
-                # STEMHD uses concatenation-based interpolation for temp
-                H_timebin = torch.cat((H_spatial_accumulated[:self.dims // 2], T_t[-self.dims // 2:]), dim=0)
+        # **Step 2: Process Time Bins Based on Encoding Method**
+        sorted_time_bins = sorted(temporal_dict.keys())  # Ensure bins are in order
+        permuted_time_hvs = []
+        bundled_time_hvs = []
+
+        for index, time_bin in enumerate(sorted_time_bins):
+            spatial_hvs = torch.stack(temporal_dict[time_bin])  # Stack all spatial hypervectors
+            SE_t = torchhd.normalize(torchhd.multibundle(spatial_hvs))  # Bundle all spatial HVs for this bin
+
+            if self.time_interpolation_method == "event_hd_timepermutation":
+                # **Permutation Encoding: Shift spatial encoding by bin index**
+                H_timebin = torchhd.permute(SE_t, shifts=index)
+                permuted_time_hvs.append(H_timebin)
+
+            elif self.time_interpolation_method == "event_hd_timeinterpolation":
+                # **Interpolation Encoding: Weighted sum per element**
+                T_t = self.get_time_hv(time_bin)  # Fetch time hypervector
+                H_timebin = torchhd.bind(SE_t, T_t)
+                bundled_time_hvs.append(H_timebin)
+
+            elif self.time_interpolation_method == "stem_hd":
+                # **STEMHD Encoding: Concatenation-based**
+                T_t = self.get_time_hv(time_bin)  # Fetch time hypervector
+                H_timebin = torch.cat((SE_t[:self.dims // 2], T_t[-self.dims // 2:]), dim=0)
+                bundled_time_hvs.append(H_timebin)
+
+        # **Step 3: Final Temporal Bundling**
+        if self.time_interpolation_method == "event_hd_timepermutation":
+            if permuted_time_hvs:
+                H_spatiotemporal = torchhd.normalize(torchhd.multibundle(torch.stack(permuted_time_hvs)))
             else:
-                # EventHD & GraspHD use weighted sum per element
-                H_timebin = torchhd.bind(H_spatial_accumulated, T_t)
+                H_spatiotemporal = torchhd.empty(1, self.dims).squeeze(0)
 
-            # **Step 3: Accumulate Time-Encoded Hypervectors Across All Time Bins**
-            H_spatiotemporal = H_timebin if H_spatiotemporal is None \
-                else torchhd.normalize(torchhd.bundle(H_spatiotemporal, H_timebin))
-
-        if H_spatiotemporal is not None:
-            H_spatiotemporal = torchhd.normalize(H_spatiotemporal)
+        elif self.time_interpolation_method in ["event_hd_timeinterpolation", "stem_hd"]:
+            if bundled_time_hvs:
+                H_spatiotemporal = torchhd.normalize(torchhd.multibundle(torch.stack(bundled_time_hvs)))
+            else:
+                H_spatiotemporal = torchhd.empty(1, self.dims).squeeze(0)
 
         print(f"\nEncoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}")
         return H_spatiotemporal
 
+    # 1 loop
     def process_windows(self, full_events, class_id):
-        """Splits a full event sequence into sliding windows and encodes each separately, multiple returned hvs per sample."""
+        """Splits a full event sequence into sliding windows and encodes each separately."""
         event_hvs = []  # Stores HVs per window
-        start_time = full_events[0][0]  # First event timestamp
+        total_events = len(full_events)
+
+        # Get first and last timestamp
+        first_t = full_events[0][0] if total_events > 0 else None
+        last_t = full_events[-1][0] if total_events > 0 else None
+        total_duration = last_t - first_t if total_events > 0 else 0
+
+        # Compute expected number of windows BEFORE processing
+        if total_duration >= self.WINDOW_SIZE_MS:
+            expected_windows = (total_duration - self.OVERLAP_MS) // (self.WINDOW_SIZE_MS - self.OVERLAP_MS) + 1
+        else:
+            expected_windows = 1 if total_events >= 5 else 0  # Only if enough events exist
+
+        print(f"\n[INFO] Encoding Sample | Class: {class_id} | Total Events: {total_events}")
+        print(f"      - First Timestamp: {first_t}, Last Timestamp: {last_t}")
+        print(f"      - Total Duration: {total_duration} ms")
+        print(f"      - Expected Windows: {expected_windows}")
+
+        # Now process windows as before
+        start_time = first_t if total_events > 0 else 0  # Ensure we start at the actual first event
         end_time = start_time + self.WINDOW_SIZE_MS
         window_index = 0
         window_events = []
         skipped_windows = 0
 
-        print(f"\n[INFO] Encoding Sample | Class: {class_id} | Total Events: {len(full_events)}")
-
         for t, x, y, polarity in full_events:
             if t >= end_time:  # Window finished
                 if window_events:
-                    # Reset timestamps within the window to start at 0
-                    window_events = [(t - start_time, x, y, p) for t, x, y, p in window_events]
+                    adjusted_events = [(t - start_time, x, y, p) for t, x, y, p in window_events]
 
-                    if len(window_events) < 100:  # Skip tiny windows
-                        print(f"[DEBUG] Skipping small window {window_index} (Only {len(window_events)} events)")
+                    if len(adjusted_events) < 5:  # Skip tiny windows
+                        print(f"[DEBUG] Skipping small window {window_index} (Only {len(adjusted_events)} events)")
                         skipped_windows += 1
                     else:
-                        first_ts, last_ts = window_events[0][0], window_events[-1][0]
+                        first_ts, last_ts = adjusted_events[0][0], adjusted_events[-1][0]
                         print(f"[DEBUG] Window {window_index}: Start={start_time}, End={end_time}, "
-                              f"Total Events={len(window_events)}, First Timestamp={first_ts}, Last Timestamp={last_ts}")
+                              f"Total Events={len(adjusted_events)}, First Timestamp={first_ts}, Last Timestamp={last_ts}")
 
-                        # Encode the window
-                        window_hv = self.encode_eventhd(window_events, class_id)
+                        window_hv = self.encode_eventhd(adjusted_events, class_id)
                         if window_hv is not None:
                             event_hvs.append(window_hv)
 
-                    window_index += 1  # Move to next window
+                    window_index += 1
 
-                # Move window start with overlap
-                start_time = t - self.OVERLAP_MS
+                start_time += (self.WINDOW_SIZE_MS - self.OVERLAP_MS)
                 end_time = start_time + self.WINDOW_SIZE_MS
-                window_events = []  # Reset collection
+                window_events = []
 
             window_events.append((t, x, y, polarity))  # Collect events for the current window
 
-        # **Final Debug Output for the last window**
+        # Final window processing
         if window_events:
-            window_events = [(t - start_time, x, y, p) for t, x, y, p in window_events]
+            adjusted_events = [(t - start_time, x, y, p) for t, x, y, p in window_events]
 
-            if len(window_events) < 100:
-                print(f"[DEBUG] Skipping small final window {window_index} (Only {len(window_events)} events)")
+            if len(adjusted_events) < 5:
+                print(f"[DEBUG] Skipping small final window {window_index} (Only {len(adjusted_events)} events)")
                 skipped_windows += 1
             else:
-                first_ts, last_ts = window_events[0][0], window_events[-1][0]
+                first_ts, last_ts = adjusted_events[0][0], adjusted_events[-1][0]
                 print(f"[DEBUG] Final Window {window_index}: Start={start_time}, End={end_time}, "
-                      f"Events={len(window_events)}, First Timestamp={first_ts}, Last Timestamp={last_ts}")
+                      f"Events={len(adjusted_events)}, First Timestamp={first_ts}, Last Timestamp={last_ts}")
 
-                if len(window_events) < self.WINDOW_SIZE_MS:
-                    print(f"[DEBUG] Final window is shorter than expected: {len(window_events)} events.")
+                if len(adjusted_events) < self.WINDOW_SIZE_MS:
+                    print(f"[DEBUG] Final window is shorter than expected: {len(adjusted_events)} events.")
 
-                window_hv = self.encode_eventhd(window_events, class_id)
+                window_hv = self.encode_eventhd(adjusted_events, class_id)
                 if window_hv is not None:
                     event_hvs.append(window_hv)
 
-        # **Summary Debug Output**
-        print(
-            f"[INFO] Sample {class_id} - Total Windows Created: {len(event_hvs)} | Skipped Small Windows: {skipped_windows}\n")
+        print(f"[INFO] Sample {class_id} - Created: {len(event_hvs)} windows | Skipped: {skipped_windows}\n")
 
-        return event_hvs  # Returns multiple HVs (one per valid window)
+        return event_hvs
 
     ####################graveyard##############
 

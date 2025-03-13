@@ -58,12 +58,11 @@ class seedEncoder:
                     interpolated_time = (i * self.time_subwindow) + t
                     self.time_hvs[interpolated_time] = interpolated_hv  # Store interpolated HVs
 
-        elif self.time_interpolation_method == "event_hd_timepermutation":
-            # EventHD Permutation Encoding: No interpolation, just base identity vector
-            self.time_hvs[0] = torchhd.identity(1, self.dims, device=self.device).squeeze(0)
-            print(f"| Using Temporal Permutation Encoding | Base Identity Vector Initialized")
+            print(f"| Precomputed {len(self.time_hvs)} total time hypervectors (anchors + interpolations).")
 
-        print(f"| Precomputed {len(self.time_hvs)} total time hypervectors (anchors + interpolations).")
+        elif self.time_interpolation_method == "event_hd_timepermutation":
+            print(f"| Using Temporal Permutation Encoding EVENTHD |")
+
 
 
         '''
@@ -83,7 +82,6 @@ class seedEncoder:
         """Retrieves time hypervector using a local windowed timestamp (ensuring every window starts at t=0)."""
         if not (0 <= t < self.WINDOW_SIZE_MS):
             raise ValueError(f"[ERROR] Event timestamp {t} out of range (0-{self.WINDOW_SIZE_MS})")
-
         if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation"]:
             if t in self.time_hvs:
                 return self.time_hvs[t]
@@ -93,10 +91,6 @@ class seedEncoder:
             print(f"[WARNING] Requested time {t} not found! Using closest available: {closest_key}")
             return self.time_hvs[closest_key]
 
-        elif self.time_interpolation_method == "event_hd_timepermutation":
-            """Shift an identity HV based on a **window-local** timestamp"""
-            base_hv = self.time_hvs[0]
-            return torchhd.permute(base_hv, shifts=int(t % self.time_subwindow))  # Shift based on time
 
     #-----------------Spatial-----------------------------------
 
