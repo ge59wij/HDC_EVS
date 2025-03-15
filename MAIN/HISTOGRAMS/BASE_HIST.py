@@ -207,17 +207,7 @@ class HDHypervectorGenerators:
         return interpolated_hv
 
     ###########################################################time#####
-    def _generate_time_hvs(self, n_bins):
-        """
-        Generates N hypervectors for the time bins inside a window.
-        Each time step is a permutation of a base hypervector. ####fot thermomter snd eventhd permutation.
-        """
-        if self.method_encoding == "linear":
-            base_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
-            ###############re think shift size, now its 1 per iteration, not great!
-            return torch.stack([torchhd.permute(base_hv, shifts=i * 90) for i in range(n_bins)])
-        else:
-            return torchhd.thermometer(self.n_gram,self.dims,"MAP")
+
 
     def get_time_hv(self, bin_id):
         """

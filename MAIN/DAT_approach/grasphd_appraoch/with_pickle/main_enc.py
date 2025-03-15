@@ -4,24 +4,31 @@ import os
 import pickle
 from tqdm import tqdm
 from grasphdencoding import Raw_events_HDEncoder
-from torchhd.models import Centroid
+from  seperaterawencoderfromhist import Raw_events_HDEncoder_Enhanced
 import random
 import torchmetrics
 import torchhd.utils
-import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.manifold import TSNE
 import numpy as np
 import tonic
 import time
 from sklearn.metrics import confusion_matrix
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+from torchhd.models import Centroid
 import seaborn as sns
+import gc
+gc.collect()
+
 os.environ["OMP_NUM_THREADS"] = "8"
 torch.set_num_threads(8)
 torch.set_printoptions(sci_mode=False)
 np.set_printoptions(suppress=True, precision=8)
+torch.manual_seed(40)
+np.random.seed(40)
+random.seed(40)
 import resource
-resource.setrlimit(resource.RLIMIT_AS, (10_000_000_000, 10_000_000_000))  # 2GB limit
+#resource.setrlimit(resource.RLIMIT_AS, (10_000_000_000, 10_000_000_000))  # 2GB limit
 
 '''
 stem: Interpolation is done dimension-wise (not concatenation!) for spatial. for temp: STEMHD does use concatenation for  1D temporal interpolation.
@@ -52,10 +59,12 @@ GraspHD = Uses weighted sum for both space and time (no concatenation).
 # -------------------------------- Hyperparameters --------------------------------
 TRAINING_METHOD = "centroid"  # "centroid" "adaptive"
 LEARNING_RATE = 0.5
-ENCODING_METHOD = Raw_events_HDEncoder
 #["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation"]:
-TIME_INTERPOLATION_METHOD = "event_hd_timeinterpolation"
+TIME_INTERPOLATION_METHOD = "thermometer"
+ENCODING_METHOD = Raw_events_HDEncoder
 
+if TIME_INTERPOLATION_METHOD in ["thermometer","linear"]:
+    ENCODING_METHOD = Raw_events_HDEncoder_Enhanced
 
 # thermometer, permutation,encode_temporalpermutation_weight
 
@@ -64,39 +73,43 @@ def main():
     device = "cpu"
     print(f"Using device: {device}")
     height, width = 34, 34
-
+    split_name = "Train"
     # ------------------------ Parameters ------------------------
-    dataset_name = "nmnist"  # chifoumi
+    dataset_name = "chifoumi"  # chifoumi
     dataset_path = "/space/chair-nas/tosy/data/"
 
     if dataset_name == "chifoumi":
         dataset_path = "/space/chair-nas/tosy/preprocessed_dat_chifoumi"
         height = 480
         width = 640
-        #picked_samples
+        split_name="picked_samples"
 
-    max_samples_train, max_samples_test = 1,2
+    max_samples_train, max_samples_test = 70,30
 
-    DIMS, K, Timewindow = 4000, 5 , 30_000
+    DIMS, K, Timewindow = 6000, 20 , 90_000
 
-    WINDOW_SIZE_MS, OVERLAP_MS= 400_000, 10_000
+    WINDOW_SIZE_MS, OVERLAP_MS= 600_000, 200_000
 
     save =True
 
     # ------------------------ Load & Preprocess Dataset ------------------------
-    dataset_train = load__dataset(dataset_path, "Train", max_samples_train, dataset_name)
-    dataset_test = load__dataset(dataset_path, "Test", max_samples_test, dataset_name)
+    dataset_train = load__dataset(dataset_path, split_name, max_samples_train, dataset_name)
+    dataset_test = load__dataset(dataset_path, "picked_samples", max_samples_test, dataset_name)
     max_time = WINDOW_SIZE_MS
     print(f"[INFO] Using max_time = {max_time}")
 
-    encoder = Raw_events_HDEncoder(
+    encoder = ENCODING_METHOD(
         height=height, width=width, dims=DIMS, time_subwindow=Timewindow, k=K, device=device,
         max_time=max_time, time_method=TIME_INTERPOLATION_METHOD,
         WINDOW_SIZE_MS=WINDOW_SIZE_MS, OVERLAP_MS=OVERLAP_MS
     )
 
     # ------------------------ Encode Train & Test Data ------------------------
-    encoded_train, labels_train = encode_dataset(dataset_train, encoder, split_name="Train")
+    encoded_train, labels_train = encode_dataset(dataset_train, encoder, split_name=split_name)
+    run_folder = create_unique_run_folder("/space/chair-nas/tosy/3.mars_after_fixes/test_run/") if save else None
+    plot_heatmap(encoded_train, labels_train, K, Timewindow, DIMS, max_samples_train, TIME_INTERPOLATION_METHOD, save,
+                 run_folder, "train")
+
     encoded_test, labels_test = encode_dataset(dataset_test, encoder, split_name="Test")
 
     # ------------------------ Save Data ------------------------
@@ -167,7 +180,7 @@ def load__dataset(dataset_path, split, max_samples, dataset_name):
 def encode_dataset(dataset, encoder, split_name):
     encoded_vectors, class_labels = [], []
     for events, class_id in tqdm(dataset, desc=f"Encoding {split_name} Samples"):
-        encoded_windows = encoder.process_windows(events, class_id)     ####
+        encoded_windows = encoder.process_windows(events, class_id)     ####should work, if not suse if else.
         encoded_vectors.extend(encoded_windows)
         class_labels.extend([class_id] * len(encoded_windows))
     return torch.stack(encoded_vectors), class_labels
