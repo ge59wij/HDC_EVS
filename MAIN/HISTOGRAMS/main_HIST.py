@@ -3,24 +3,16 @@ import h5py
 import numpy as np
 import torch
 import torchhd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-from collections import defaultdict
-from torchhd.models import Centroid
 from HIST_Encoder import HISTEncoder
 import random
-from sklearn.manifold import TSNE
-import torchmetrics
-import datetime
-import json
 import resource
 import psutil
-import time
 from MAIN.DAT_approach.grasphd_appraoch.with_pickle.main_enc import (
     create_unique_run_folder, _test_model, train_model, plot_heatmap,
     plot_tsne, plot_confusion_matrix, save_hyperparameters, encode_dataset)
+
 total_memory = psutil.virtual_memory().total
 safe_limit = int(total_memory * 0.9) # of total RAM
 resource.setrlimit(resource.RLIMIT_AS, (safe_limit, safe_limit))
@@ -45,9 +37,9 @@ NGRAM_SIZE = 9
 OVERLAP = 10
 method_encoding = "linear"  # "thermometer" or "linear" or kxk_ngram or "eventhd_timeinterpolation" "eventhd_timepermutation" "stem_hd"
 train_samples, test_samples = 100, 20
+weighting = True
 
-
-def main(skip_training):
+def main():
     torch.manual_seed(40)
     np.random.seed(40)
     random.seed(40)
@@ -82,8 +74,8 @@ def main(skip_training):
                           ,K=K,debug=DEBUG_MODE, weighting= weighting)
 
 
-    encoded_train, labels_train = encode_dataset(train_loader, encoder, "TRAIN")
-    encoded_test, labels_test == encode_dataset(test_loader, encoder,"TEST")
+    encoded_train, labels_train = encode_dataset(train_loader, encoder, "TRAIN", DEBUG_MODE)
+    encoded_test, labels_test = encode_dataset(test_loader, encoder,"TEST",DEBUG_MODE)
 
     run_dir = create_unique_run_folder("/space/chair-nas/tosy/17marsHIST/test_run/")
 
@@ -96,16 +88,18 @@ def main(skip_training):
         model, train_acc = train_model(encoded_train, labels_train, method, debug=True, d=DIMS)
         models[method] = model
         train_accuracies[method] = train_acc
-
         train_acc, train_preds = _test_model(model, encoded_train, labels_train)
         print(f"[INFO] {method} Train Accuracy: {train_acc:.3f}%")
-
         test_acc, test_preds = _test_model(model, encoded_test, labels_test)
         accuracies[method] = test_acc
         print(f"[INFO] {method} Test Accuracy: {test_acc:.3f}%")
+        plot_confusion_matrix(labels_train, train_preds, save=save, run_folder=run_dir, split_name=f"Train_{method}")
+        plot_confusion_matrix(labels_test, test_preds, save=save, run_folder=run_dir, split_name=f"Test_{method}")
+    plot_heatmap(encoded_train, labels_train, K, WINDOW_SIZE, DIMS, train_samples, method_encoding, save,
+                 run_dir, "Train")
+    plot_heatmap(encoded_train, labels_train, K, WINDOW_SIZE, DIMS, test_samples, method_encoding, save,
+                 run_dir, "Test")
 
-        plot_confusion_matrix(labels_train, train_preds, save=True, run_folder=run_dir, split_name=f"Train_{method}")
-        plot_confusion_matrix(labels_test, test_preds, save=True, run_folder=run_dir, split_name=f"Test_{method}")
 
     #print("\n[INFO] Computing intra/inter-class similarities (Heatmap)...")
     #intra_sim, inter_sim = compute_intra_inter_class_similarities(train_vectors, train_labels, run_dir=run_dir, filename="vector_similarity_heatmap.png",sample_limit=20, debug=True)
@@ -113,32 +107,20 @@ def main(skip_training):
     plot_tsne(encoded_train, labels_train, K, WINDOW_SIZE, DIMS, method_encoding, True, run_dir, "train")
     plot_tsne(encoded_test, labels_test, K, WINDOW_SIZE, DIMS, method_encoding, True, run_dir, "test")
 
-
-     save_hyperparameters(run_dir, {
+    save_hyperparameters(run_dir, {
             "Methods": TRAIN_METHODS,
+            "Encoding Method": method_encoding,
             "Train_Accuracies": train_accuracies,
             "Test_Accuracies": accuracies,
             "DIMS": DIMS,
             "k": K,
             "Window Size": WINDOW_SIZE,
             "Overlap": OVERLAP,
-            "NGRAM"= NGRAM_SIZE,
-            "Event count bin Threshhold" = EVENT_THRESHOLD,
-            "Train Samples": len(train_dataset_obj),
-            "Test Samples": len(test_dataset_obj),
-            "Encoding Method": method_encoding,
-            "Event Count weighting": weighting,
-
+            "NGRAM": NGRAM_SIZE,
+            "Event count bin Threshold": EVENT_THRESHOLD,
+            "Train Samples": len(train_loader),
+            "Test Samples": len(test_loader)
         })
-
-
-
-
-
-
-
-
-
 
 
 
@@ -284,7 +266,6 @@ def compute_intra_inter_class_similarities(vectors, labels, run_dir, filename="s
         if len(cls_indices) > sample_limit:
             cls_indices = cls_indices[:sample_limit]
         class_vectors[cls] = vectors[cls_indices]
-
     intra_sim = {}
     inter_sim = {}
 
@@ -309,11 +290,8 @@ def compute_intra_inter_class_similarities(vectors, labels, run_dir, filename="s
                 inter_sim[cls][other_cls] = inter
                 if debug:
                     print(f"  - {cls} vs. {other_cls}: Inter-Class Similarity: {inter:.3f}")
-
-    # Save sorted heatmap
     plot_path = os.path.join(run_dir, filename)
-    create_similarity_heatmap(intra_sim, inter_sim, plot_path)
-
+    #create_similarity_heatmap(intra_sim, inter_sim, plot_path)
     return intra_sim, inter_sim
 
 

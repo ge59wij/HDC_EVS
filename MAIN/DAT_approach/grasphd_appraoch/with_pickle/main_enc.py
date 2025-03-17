@@ -55,7 +55,9 @@ GraspHD = Uses weighted sum for both space and time (no concatenation).
 
 '''
 #["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation", kxk_ngram]:
-TIME_INTERPOLATION_METHOD = "event_hd_timeinterpolation"
+TIME_INTERPOLATION_METHOD = "event_hd_timepermutation"
+
+
 
 ENCODING_METHOD = Raw_events_HDEncoder
 if TIME_INTERPOLATION_METHOD in ["thermometer","linear","kxk_ngram"]:
@@ -77,13 +79,13 @@ def main():
         train_split = "Train"
         test_split = "Test"
 
-    max_samples_train, max_samples_test = 100,20
+    max_samples_train, max_samples_test = 10,20
 
     DIMS, K, Timewindow = 4000, 5 , 50_000
 
     WINDOW_SIZE_MS, OVERLAP_MS= 600000, 0
     debug = True
-    save =True
+    save =False
 
     dataset_train = load__dataset(dataset_path, train_split, max_samples_train, dataset_name)
     dataset_test = load__dataset(dataset_path, test_split, max_samples_test, dataset_name)
@@ -125,8 +127,8 @@ def main():
 
     plot_heatmap(encoded_train, labels_train, K, Timewindow, DIMS, max_samples_train, TIME_INTERPOLATION_METHOD, save,
                  run_folder, "Train")
-    plot_heatmap(encoded_train, labels_train, K, Timewindow, DIMS, max_samples_train, TIME_INTERPOLATION_METHOD, save,
-                 run_folder, train_split)
+    plot_heatmap(encoded_train, labels_train, K, Timewindow, DIMS, max_samples_test, TIME_INTERPOLATION_METHOD, save,
+                 run_folder, "Test")
 
 
 
@@ -207,12 +209,9 @@ def encode_dataset(dataset, encoder, split_name):
         class_labels.extend([class_id] * len(encoded_windows))
     return torch.stack(encoded_vectors), class_labels
 
-
 def train_model(encoded_vectors, class_labels, method, debug, d):
-    """Trains a model using TorchHD classifiers."""
     unique_classes = sorted(list(set(class_labels)))
     num_classes = len(unique_classes)
-
     if debug:
         print(f"\n[TRAINING] Using method: {method}")
         print(f"[TRAINING] Number of classes: {num_classes}")
@@ -223,7 +222,6 @@ def train_model(encoded_vectors, class_labels, method, debug, d):
             class_counts[cls] += 1
         print(f"[TRAINING] Vectors per class: {dict(class_counts)}")
 
-    # **Handle Centroid & Vanilla (both are centroid-based)**
     if method in ["Centroid", "Vanilla"]:
         model = torchhd.models.Centroid(in_features=d, out_features=num_classes)
         with torch.no_grad():
@@ -233,13 +231,13 @@ def train_model(encoded_vectors, class_labels, method, debug, d):
                 model.weight[class_id] = class_vectors.mean(dim=0)
             model.normalize()  # Normalize for cosine similarity
 
-    # **Handle AdaptHD & OnlineHD**
     elif method in ["AdaptHD", "OnlineHD"]:
         model_cls = getattr(torchhd.classifiers, method)
         model = model_cls(
             n_features=d,
             n_dimensions=d,
             n_classes=num_classes,
+            epochs=10,
             device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
 
@@ -263,7 +261,6 @@ def train_model(encoded_vectors, class_labels, method, debug, d):
 
     return model, train_accuracy
 
-
 def _test_model(model, encoded_test, test_labels):
     accuracy_metric = torchmetrics.Accuracy("multiclass", num_classes=len(set(test_labels)))
     with torch.no_grad():
@@ -272,7 +269,6 @@ def _test_model(model, encoded_test, test_labels):
         accuracy_metric.update(output, torch.tensor(test_labels, dtype=torch.long))
     acc = accuracy_metric.compute().item() * 100
     return acc, preds.tolist()
-
 
 def plot_heatmap(vectors, labels, k, Timewindow, dims, max_samples, encodingmethod, save, run_folder, split_name):
     """Plots and saves a cosine similarity heatmap ensuring equal selection from all available classes."""
@@ -337,28 +333,21 @@ def plot_heatmap(vectors, labels, k, Timewindow, dims, max_samples, encodingmeth
         save_plot(run_folder, f"{split_name}_balanced_heatmap.png")
 
     plt.close()
-
-
 def check_centroid_similarity(model, encoded_train, labels_train):
     """Checks how similar each centroid is to its respective class samples."""
-
     if hasattr(model, "model") and isinstance(model.model, Centroid):
         centroids = model.model.weight.detach().cpu()  # Extract centroids correctly
     else:
         print("[WARNING] Model does not contain centroids. Skipping similarity check.")
         return
-
-    encoded_train = encoded_train.cpu()  # Move training samples to CPU
+    encoded_train = encoded_train.cpu()
     labels_train = torch.tensor(labels_train, dtype=torch.long, device="cpu")  # Convert labels to tensor
-
     num_classes = centroids.shape[0]  # Number of classes
     similarities = []
-
     for class_id in range(num_classes):
         # Select only the training samples belonging to the current class
         class_mask = labels_train == class_id
         class_samples = encoded_train[class_mask]  # Filter samples by class
-
         if class_samples.shape[0] == 0:
             print(f"[WARN] No samples found for class {class_id}")
             similarities.append(0)
@@ -366,7 +355,6 @@ def check_centroid_similarity(model, encoded_train, labels_train):
         centroid = centroids[class_id].unsqueeze(0)  # Ensure centroid has shape (1, D)
         sim = torchhd.functional.cosine_similarity(class_samples, centroid).mean()
         similarities.append(sim.item())
-
     print("\n **Average cosine similarities of centroids with their class samples:**")
     for i, sim in enumerate(similarities):
         print(f"Class {i}: {sim:.4f}")
@@ -378,8 +366,6 @@ def plot_tsne(encoded_vectors, class_labels, k, Timewindow, dims,  encodingmetho
     tsne = TSNE(n_components=2, perplexity=5, random_state=42)
     encoded_vectors = np.array(encoded_vectors)  # Convert list to NumPy array
     reduced_vectors = tsne.fit_transform(encoded_vectors)
-
-    # Plot t-SNE scatter
     plt.figure(figsize=(8, 6))
     unique_classes = np.unique(class_labels)
     colors = ["red", "blue", "green", "purple", "orange"]
@@ -416,8 +402,6 @@ def plot_confusion_matrix(true_labels, pred_labels, save, run_folder, split_name
     if save and run_folder:
         save_plot(run_folder, f"{split_name}_confusion_matrix.png")
     plt.close()
-
-
 def save_plot(run_folder, filename):
     """Saves the current plot to the specified folder."""
     plt.savefig(os.path.join(run_folder, filename), bbox_inches="tight")
