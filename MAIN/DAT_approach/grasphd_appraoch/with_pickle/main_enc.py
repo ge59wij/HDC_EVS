@@ -9,7 +9,6 @@ import random
 import torchmetrics
 import torchhd.utils
 import torchhd.classifiers
-
 import numpy as np
 import tonic
 from sklearn.metrics import confusion_matrix
@@ -55,16 +54,9 @@ EventHD = Uses weighted sum for both space and time (no concatenation).
 GraspHD = Uses weighted sum for both space and time (no concatenation).
 
 '''
-NUM_TRAIN_METHODS = ["Vanilla", "AdaptHD", "OnlineHD"]
+#["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation", kxk_ngram]:
+TIME_INTERPOLATION_METHOD = "event_hd_timeinterpolation"
 
-# -------------------------------- Hyperparameters --------------------------------
-
-#["event_hd_timepermutation", "stem_hd" , "event_hd_timeinterpolation"]:
-TIME_INTERPOLATION_METHOD = "kxk_ngram"
-
-
-TRAINING_METHOD = "AdaptHD"  # "centroid" "adaptive"
-LEARNING_RATE = 0.5
 ENCODING_METHOD = Raw_events_HDEncoder
 if TIME_INTERPOLATION_METHOD in ["thermometer","linear","kxk_ngram"]:
     ENCODING_METHOD = Raw_events_HDEncoder_Enhanced
@@ -75,7 +67,6 @@ def main():
     train_split = "Train"
     test_split = "Test"
 
-    # ------------------------ Parameters ------------------------
     dataset_name = "nmnist"  # chifoumi
     dataset_path = "/space/chair-nas/tosy/data/"
 
@@ -86,7 +77,7 @@ def main():
         train_split = "Train"
         test_split = "Test"
 
-    max_samples_train, max_samples_test = 10,10
+    max_samples_train, max_samples_test = 100,20
 
     DIMS, K, Timewindow = 4000, 5 , 50_000
 
@@ -94,58 +85,81 @@ def main():
     debug = True
     save =True
 
-    # ------------------------ Load & Preprocess Dataset ------------------------
     dataset_train = load__dataset(dataset_path, train_split, max_samples_train, dataset_name)
     dataset_test = load__dataset(dataset_path, test_split, max_samples_test, dataset_name)
     max_time = WINDOW_SIZE_MS
-    print(f"[INFO] Using max_time = {max_time}")
-
+    print(f"[INFO] Sliding Window = {max_time}")
     encoder = ENCODING_METHOD(
         height=height, width=width, dims=DIMS, time_subwindow=Timewindow, k=K, device=device,
         max_time=max_time, time_method=TIME_INTERPOLATION_METHOD,
         WINDOW_SIZE_MS=WINDOW_SIZE_MS, OVERLAP_MS=OVERLAP_MS
     )
-
     # ------------------------ Encode Train & Test Data ------------------------
     encoded_train, labels_train = encode_dataset(dataset_train, encoder, split_name=train_split)
     encoded_test, labels_test = encode_dataset(dataset_test, encoder, split_name=test_split)
     # ------------------------ Train & Test ------------------------
-
-    print(f"\n[TRAINING] Training model using {TRAINING_METHOD}...")
-    print(
-        f"[DEBUG] Encoded train shape: {encoded_train.shape if isinstance(encoded_train, torch.Tensor) else type(encoded_train)}")
-    models = {}
-    model = train_model(encoded_train, labels_train, TRAINING_METHOD,debug, DIMS, LEARNING_RATE)
-    models[TRAINING_METHOD] = model
-    print(f"[DEBUG] Model successfully trained: {model}")  # Debug check
-    accuracy, preds = _test_model(model, encoded_test, labels_test)  # Now returns preds too
-    print(f"Testing Accuracy: {accuracy:.3f}%")
     run_folder = create_unique_run_folder("/space/chair-nas/tosy/17marsraw/test_run/") if save else None
 
-    plot_confusion_matrix(labels_test, preds, save, run_folder, test_split)
+    models = {}
+    accuracies = {}
+    train_accuracies = {}
+
+    for method in ["Vanilla", "AdaptHD", "OnlineHD", "Centroid"]:
+        print(f"\n[TRAINING] Training model using {method}...")
+        model, train_acc = train_model(encoded_train, labels_train, method, debug, DIMS)
+        models[method] = model
+        train_accuracies[method] = train_acc
+
+        # **Test Model on Train Data**
+        train_acc, train_preds = _test_model(model, encoded_train, labels_train)
+        print(f"[INFO] {method} Train Accuracy: {train_acc:.3f}%")
+
+        # **Test Model on Test Data**
+        test_acc, test_preds = _test_model(model, encoded_test, labels_test)
+        accuracies[method] = test_acc
+        print(f"[INFO] {method} Test Accuracy: {test_acc:.3f}%")
+
+        print(f"[DEBUG] Model successfully trained: {model}")
+        plot_confusion_matrix(labels_train, train_preds, save, run_folder, f"Train_{method}")
+        plot_confusion_matrix(labels_test, test_preds, save, run_folder, f"Test_{method}")
+
+    plot_heatmap(encoded_train, labels_train, K, Timewindow, DIMS, max_samples_train, TIME_INTERPOLATION_METHOD, save,
+                 run_folder, "Train")
     plot_heatmap(encoded_train, labels_train, K, Timewindow, DIMS, max_samples_train, TIME_INTERPOLATION_METHOD, save,
                  run_folder, train_split)
-    plot_heatmap(encoded_test, labels_test, K, Timewindow, DIMS, max_samples_test, TIME_INTERPOLATION_METHOD, save,
-                 run_folder, test_split)
-    plot_tsne(encoded_train, labels_train, K, Timewindow, DIMS, max_samples_train, TIME_INTERPOLATION_METHOD, save,
-              run_folder, train_split)
-    plot_tsne(encoded_test, labels_test, K, Timewindow, DIMS, max_samples_test, TIME_INTERPOLATION_METHOD, save,
-                  run_folder, test_split)
-    plot_tsne_with_centroids(model, encoded_train, labels_train, save, run_folder, train_split)
-    plot_tsne_with_centroids(model, encoded_test, labels_test, save, run_folder, test_split)
-    run_folder = create_unique_run_folder("/space/chair-nas/tosy/3.mars_after_fixes/test_run/") if save else None
-    if save:
-        save_encoded_data(run_folder, encoded_train, labels_train, train_split)
-        save_encoded_data(run_folder, encoded_test, labels_test, test_split)
-        save_hyperparameters(run_folder, {
-            "k": K, "Timewindow": Timewindow, "DIMS": DIMS, "Train_samples": len(dataset_train),
-            "Test_samples": len(dataset_test), "Method": TIME_INTERPOLATION_METHOD, "accuracy": accuracy, })
 
-    if hasattr(model, "model") and isinstance(model.model, Centroid):
-        print("Centroid norms:", model.model.weight.norm(dim=1))
-        check_centroid_similarity(model, encoded_train, labels_train)
-    else:
-        print("[WARNING] Skipping centroid similarity check as model has no centroids.")
+
+
+    plot_tsne(encoded_train, labels_train, K, Timewindow, DIMS, TIME_INTERPOLATION_METHOD, save,run_folder, train_split)
+    plot_tsne(encoded_test, labels_test, K, Timewindow, DIMS, TIME_INTERPOLATION_METHOD, save, run_folder, test_split)
+    if save:
+        save_hyperparameters(run_folder, {
+            "Methods": list(accuracies.keys()),
+            "Train_Accuracies": train_accuracies,
+            "Test_Accuracies": accuracies,
+            "k": K, "Timewindow": Timewindow, "DIMS": DIMS,
+            "Train_samples": len(dataset_train), "Test_samples": len(dataset_test),
+            "Method": TIME_INTERPOLATION_METHOD,
+
+        })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def load__dataset(dataset_path, split, max_samples, dataset_name):
@@ -194,7 +208,7 @@ def encode_dataset(dataset, encoder, split_name):
     return torch.stack(encoded_vectors), class_labels
 
 
-def train_model(encoded_vectors, class_labels, method, debug, d, lr):
+def train_model(encoded_vectors, class_labels, method, debug, d):
     """Trains a model using TorchHD classifiers."""
     unique_classes = sorted(list(set(class_labels)))
     num_classes = len(unique_classes)
@@ -209,35 +223,45 @@ def train_model(encoded_vectors, class_labels, method, debug, d, lr):
             class_counts[cls] += 1
         print(f"[TRAINING] Vectors per class: {dict(class_counts)}")
 
-    if method in torchhd.classifiers.__dict__:
+    # **Handle Centroid & Vanilla (both are centroid-based)**
+    if method in ["Centroid", "Vanilla"]:
+        model = torchhd.models.Centroid(in_features=d, out_features=num_classes)
+        with torch.no_grad():
+            for class_id in unique_classes:
+                class_mask = torch.tensor(class_labels) == class_id
+                class_vectors = encoded_vectors[class_mask]
+                model.weight[class_id] = class_vectors.mean(dim=0)
+            model.normalize()  # Normalize for cosine similarity
+
+    # **Handle AdaptHD & OnlineHD**
+    elif method in ["AdaptHD", "OnlineHD"]:
         model_cls = getattr(torchhd.classifiers, method)
-        # For these classifiers, pass the required arguments
         model = model_cls(
             n_features=d,
             n_dimensions=d,
             n_classes=num_classes,
             device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
+
+        labels_tensor = torch.tensor(class_labels, dtype=torch.long)
+        dataset = torch.utils.data.TensorDataset(encoded_vectors, labels_tensor)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
+
+        model.fit(loader)  # **Remove `epochs=10` (not needed)**
+
+        # **Normalize Centroids if using a centroid-based classifier**
+        if hasattr(model, "model") and isinstance(model.model, torchhd.models.Centroid):
+            with torch.no_grad():
+                model.model.weight.data = torch.nn.functional.normalize(model.model.weight.data, dim=1)
+
     else:
         raise ValueError(f"Unknown training method: {method}")
 
-    labels_tensor = torch.tensor(class_labels, dtype=torch.long)
-    # Create a DataLoader from encoded vectors and labels
-    dataset = torch.utils.data.TensorDataset(encoded_vectors, labels_tensor)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
+    # **Compute Training Accuracy**
+    train_accuracy, _ = _test_model(model, encoded_vectors, class_labels)
+    print(f"[TRAINING] {method} Training Accuracy: {train_accuracy:.3f}%")
 
-    # Use the classifier's built-in fit() method
-    model.fit(loader)
-
-    if debug:
-        with torch.no_grad():
-            sim = model(encoded_vectors)
-            preds = sim.argmax(1)
-            correct = (preds == labels_tensor).sum().item()
-            acc = correct / len(labels_tensor) * 100
-            print(f"[TRAINING] Training accuracy: {acc:.2f}%")
-
-    return model
+    return model, train_accuracy
 
 
 def _test_model(model, encoded_test, test_labels):
@@ -349,58 +373,7 @@ def check_centroid_similarity(model, encoded_train, labels_train):
 
     return similarities
 
-
-def plot_tsne_with_centroids(model, vectors, labels, save, run_folder, split_name):
-    """Plots t-SNE with all samples & centroids to visualize separation."""
-
-    if hasattr(model, "model") and isinstance(model.model, Centroid):
-        centroids = model.model.weight.detach().cpu().numpy()
-    else:
-        print("[WARNING] Model does not contain centroids. Skipping t-SNE with centroids.")
-        return
-
-    tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-
-    encoded_vectors = np.array(vectors)
-
-    # **Step 1: Combine samples & centroids before t-SNE transformation**
-    all_vectors = np.vstack([encoded_vectors, centroids])
-
-    # **Step 2: Apply t-SNE to all data at once**
-    reduced_all = tsne.fit_transform(all_vectors)
-
-    # **Step 3: Split transformed data back into samples & centroids**
-    reduced_vectors = reduced_all[:-centroids.shape[0]]
-    reduced_centroids = reduced_all[-centroids.shape[0]:]
-
-    # **Plot t-SNE scatter**
-    plt.figure(figsize=(8, 6))
-    unique_classes = np.unique(labels)
-    colors = sns.color_palette("tab10", len(unique_classes))
-
-    for idx, class_id in enumerate(unique_classes):
-        indices = np.where(np.array(labels) == class_id)[0]
-        plt.scatter(
-            reduced_vectors[indices, 0], reduced_vectors[indices, 1],
-            label=f"Class {class_id}", color=colors[idx], alpha=0.6, edgecolors='k'
-        )
-
-    # **Overlay Centroids**
-    plt.scatter(reduced_centroids[:, 0], reduced_centroids[:, 1],
-                marker='X', s=300, c='black', linewidths=3, label="Centroids")
-
-    plt.xlabel("t-SNE Component 1")
-    plt.ylabel("t-SNE Component 2")
-    plt.title(f"t-SNE with Centroids ({split_name})")
-    plt.legend()
-
-    if save and run_folder:
-        save_plot(run_folder, f"{split_name}_tsne_centroids.png")
-
-    plt.close()
-
-
-def plot_tsne(encoded_vectors, class_labels, k, Timewindow, dims, max_samples, encodingmethod, save, run_folder, split_name):
+def plot_tsne(encoded_vectors, class_labels, k, Timewindow, dims,  encodingmethod, save, run_folder, split_name):
     """Plots and saves t-SNE visualization for all samples."""
     tsne = TSNE(n_components=2, perplexity=5, random_state=42)
     encoded_vectors = np.array(encoded_vectors)  # Convert list to NumPy array
@@ -428,7 +401,6 @@ def plot_tsne(encoded_vectors, class_labels, k, Timewindow, dims, max_samples, e
     if save and run_folder:
         save_plot(run_folder, f"{split_name}_tsne.png")
     plt.close()
-
 
 def plot_confusion_matrix(true_labels, pred_labels, save, run_folder, split_name):
     """Generates a confusion matrix to visualize classification performance."""
@@ -497,56 +469,7 @@ def load_pickle_dataset(dataset_path, split, max_samples):
         dataset.append((events, class_id))
     print(f"Loaded {len(dataset)} samples from {split} split.")
     return dataset
-def get_max_time(dataset):
-    """
-    Extracts the max timestamp from the dataset
-    """
-    max_time = 0
-    for events, _ in dataset:
-        if len(events) > 0:
-            last_timestamp = events[-1][0]  # First element of the last tuple
-            max_time = max(max_time, last_timestamp)
-    return max_time
-
 
 if __name__ == "__main__":
     main()
 
-
-
-
-'''
-    #max_time_train = get_max_time(dataset_train)   #we dont need this for sliding window approach
-    #max_time_test = get_max_time(dataset_test)
-    #max_time = max(max_time_train, max_time_test)
-    #print(f"[INFO] Computed max_time: {max_time} (Train: {max_time_train}, Test: {max_time_test})")
-
-    print("\n[DEBUG] First 5 events of first 3 training samples:")
-    for i, (events, class_id) in enumerate(dataset_train[:3]):
-        print(f"Sample {i} (Class {class_id}): {events[:3]}")
-        target_timestamp = 9000
-        tolerance = 2  # small window around the target timestamp
-        for i, (events, class_id) in enumerate(dataset_train[:1]):  # Only first 2 samples
-            filtered_events = [event for event in events if abs(event[0] - target_timestamp) <= tolerance]
-            print(f"Sample {i} (Class {class_id}), Events around {target_timestamp}: {filtered_events}")
-
-
-
-    print_debug(TIME_INTERPOLATION_METHOD, dataset_train, encoder, max_time, Timewindow, K)
-    run_folder = create_unique_run_folder("/space/chair-nas/tosy/3.mars after fixes/test_run/") if save else None
-
-    if save:
-        save_encoded_data(run_folder, encoded_train, labels_train, "train")
-        save_encoded_data(run_folder, encoded_test, labels_test, "test")
-        save_hyperparameters(run_folder,
-                             {"k": K, "Timewindow": Timewindow, "DIMS": DIMS, "Train_samples": len(dataset_train),
-                              "Test_samples": len(dataset_test), "Method": TIME_INTERPOLATION_METHOD})
-
-
-        #elif TIME_INTERPOLATION_METHOD == "encode_temporalpermutation":
-        #    encoded_sample = encoder.encode_temporalpermutation(events, class_id)
-        #elif TIME_INTERPOLATION_METHOD == "encode_accumulation_weight":
-        #    encoded_sample = encoder.encode_accumulation_weight(events, class_id)
-        #elif TIME_INTERPOLATION_METHOD in [ "thermometer", "permutation"]:
-        #    encoded_sample = encoder.encode_accumulation(events, class_id)
-'''

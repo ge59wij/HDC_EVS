@@ -103,7 +103,6 @@ class Raw_events_HDEncoder_Enhanced:
         bins = [(bin_data, idx) for idx, bin_data in enumerate(window_data) if len(bin_data) > 0]
         if len(bins) < self.n_gram:
             return None  # Skip if not enough bins for an N-gram
-
         return self._process_ngrams(bins)
 
     def _process_ngrams(self, bins):

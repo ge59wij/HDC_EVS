@@ -5,7 +5,7 @@ from BASE_HIST import HDHypervectorGenerators
 
 class HISTEncoder:
     def __init__(self, height, width, dims, device, window_size, n_gram,
-                 threshold, method_encoding, K, debug):
+                 threshold, method_encoding, K, debug, weighting):
         self.height = height
         self.width = width
         self.dims = dims
@@ -17,7 +17,7 @@ class HISTEncoder:
         self.K = K
         self.method_encoding = method_encoding
         self.BACKGROUND_LABEL = 404
-        self.weighting = True  # Enable weighted encoding
+        self.weighting = weighting  # Enable weighted encoding
 
         self.hv_gen = HDHypervectorGenerators(
             height, width, dims, device, threshold,

@@ -7,6 +7,7 @@ import gc
 
 np.set_printoptions(suppress=True, precision=8)
 
+debug=False
 
 class Raw_events_HDEncoder(seedEncoder):
     def __init__(self, height, width, dims, k, time_subwindow, device, max_time, time_method, WINDOW_SIZE_MS, OVERLAP_MS):
@@ -14,7 +15,7 @@ class Raw_events_HDEncoder(seedEncoder):
 
     def encode_eventhd(self, events, class_id):
         """Batch event encoding with multiple time encoding methods."""
-        print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}")
+        print(f"Encoding {len(events)} events | Class: {class_id} | Device: {self.device}") if debug else None
 
         if len(events) == 0:
             return torchhd.empty(1, self.dims).squeeze(0)
@@ -81,7 +82,7 @@ class Raw_events_HDEncoder(seedEncoder):
         del P_xy, I_p, H_spatial, event_x, event_y, event_polarity, event_times, temporal_dict
         gc.collect()
 
-        print(f"\nEncoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}")
+        print(f"\nEncoding Complete | Class: {class_id} | Output: {H_spatiotemporal.shape}") if debug else None
         return H_spatiotemporal
 
 
@@ -98,11 +99,11 @@ class Raw_events_HDEncoder(seedEncoder):
         total_duration = last_t - first_t
 
         expected_windows = max(1, (total_duration - self.OVERLAP_MS) // max(1, (self.WINDOW_SIZE_MS - self.OVERLAP_MS)) + 1)
-
-        print(f"\n[INFO] Encoding Sample | Class: {class_id} | Total Events: {total_events}")
-        print(f"      - First Timestamp: {first_t}, Last Timestamp: {last_t}")
-        print(f"      - Total Duration: {total_duration} ms")
-        print(f"      - Expected Windows: {expected_windows}")
+        if debug:
+            print(f"\n[INFO] Encoding Sample | Class: {class_id} | Total Events: {total_events}")
+            print(f"      - First Timestamp: {first_t}, Last Timestamp: {last_t}")
+            print(f"      - Total Duration: {total_duration} ms")
+            print(f"      - Expected Windows: {expected_windows}")
 
         start_time = first_t
         end_time = start_time + self.WINDOW_SIZE_MS
@@ -136,7 +137,7 @@ class Raw_events_HDEncoder(seedEncoder):
         if window_events:
             adjusted_events = [(t - start_time, x, y, p) for t, x, y, p in window_events]
             if len(adjusted_events) >= 5:
-                print(f"[DEBUG] Final Window {window_index}: Start={start_time}, End={end_time}, Events={len(adjusted_events)}")
+                print(f"[DEBUG] Final Window {window_index}: Start={start_time}, End={end_time}, Events={len(adjusted_events)}") if debug else None
                 window_hv = self.encode_eventhd(adjusted_events, class_id)
 
                 if window_hv is not None:
@@ -144,7 +145,7 @@ class Raw_events_HDEncoder(seedEncoder):
             else:
                 skipped_windows += 1
 
-        print(f"[INFO] Sample {class_id} - Created: {len(event_hvs)} windows | Skipped: {skipped_windows}")
+        print(f"[INFO] Sample {class_id} - Created: {len(event_hvs)} windows | Skipped: {skipped_windows}") if debug else None
         return event_hvs
 
 '''
