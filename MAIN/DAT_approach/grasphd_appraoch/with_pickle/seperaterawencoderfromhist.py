@@ -2,28 +2,40 @@ import torch
 import torchhd
 import numpy as np
 from collections import defaultdict
+import gc
+from grasphdencoding_seedhvs import seedEncoder  # Import the existing seedEncoder
+
 
 np.set_printoptions(suppress=True, precision=8)
 
-
 class Raw_events_HDEncoder_Enhanced:
     def __init__(self, height, width, dims, time_subwindow, k, device, max_time, time_method, WINDOW_SIZE_MS, OVERLAP_MS):
+        """Initialize encoder with spatial and temporal encoding parameters."""
+        print("Initializing Raw Events HD Encoder...")
         self.n_gram = 5
         self.height = height
         self.width = width
         self.dims = dims
+        self.k = k
         self.time_subwindow = time_subwindow
         self.device = torch.device(device)
         self.time_method = time_method
         self.WINDOW_SIZE_MS = WINDOW_SIZE_MS
         self.OVERLAP_MS = OVERLAP_MS
+        self.debug = True
 
-        # Polarity Hypervectors
+        # **Polarity Hypervectors (Seed HVs)**
         self.H_I_on = torchhd.random(1, dims, "MAP", device=self.device).squeeze(0)
         self.H_I_off = -self.H_I_on
-        self.pixel_hvs = torch.zeros((height, width, dims), device=self.device)
 
-        # Generate Spatial Encoding Hypervectors
+        # **Caches (Only Seed HVs Stay)**
+        self.pixel_hvs = {}
+        self.time_hv_cache = {}  # Stores precomputed time hypervectors
+        if time_method == "kxk_ngram":
+            self.seed_encoder = seedEncoder(height, width, dims, k, time_subwindow, device, max_time, time_method,
+                                            WINDOW_SIZE_MS, OVERLAP_MS)
+
+        # **Generate Spatial Encoding Hypervectors**
         if time_method == "linear":
             self.HV_x = self._generate_linear_axis_hvs(self.width)
             self.HV_y = self._generate_linear_axis_hvs(self.height)
@@ -34,16 +46,22 @@ class Raw_events_HDEncoder_Enhanced:
             self._generate_pixel_hvs()
 
     def get_pos_hv(self, x, y):
-        x_idx = int(x)
-        y_idx = int(y)
-        return self.pixel_hvs[y_idx, x_idx]
+        """Retrieve spatial hypervector for a given position with batch processing."""
+        key = list(zip(x.tolist(), y.tolist()))
+        hvs = []
+        for k in key:
+            if k not in self.pixel_hvs:
+                self.pixel_hvs[k] = torchhd.bind(self.HV_x[k[0]], self.HV_y[k[1]])
+            hvs.append(self.pixel_hvs[k])
+        return torch.stack(hvs)
 
     def _generate_linear_axis_hvs(self, size):
+        """Generate structured hypervectors for spatial encoding using linear interpolation."""
         flip_bits = self.dims // (4 * (size - 1))
         base_hv = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
         hvs = [base_hv.clone()]
 
-        for i in range(1, size):
+        for _ in range(1, size):
             new_hv = hvs[-1].clone()
             flip_indices = torch.randperm(self.dims)[:flip_bits]
             new_hv[flip_indices] = -new_hv[flip_indices]
@@ -52,55 +70,92 @@ class Raw_events_HDEncoder_Enhanced:
         return torch.stack(hvs)
 
     def _generate_pixel_hvs(self):
+        """Precompute spatial encoding hypervectors for each pixel (cached in dictionary)."""
         for y in range(self.height):
             for x in range(self.width):
-                self.pixel_hvs[y, x] = torchhd.bind(self.HV_x[x], self.HV_y[y])
+                self.pixel_hvs[(x, y)] = torchhd.bind(self.HV_x[x], self.HV_y[y])
 
     def encode_bin(self, bin_data, time_idx):
-        """Encodes a single bin by bundling spatial hypervectors and binding with N-gram ordering."""
+        """Encodes a single bin by bundling spatial hypervectors."""
         if len(bin_data) == 0:
-            print(f"[WARNING] Skipping empty bin at index {time_idx}")
-            return None
+            return None  # Skip empty bins
 
-        # Compute spatial encoding for all events in the bin
-        spatial_hvs = torch.stack([
-            torchhd.bind(self.get_pos_hv(x, y), self.H_I_on if polarity == 1 else self.H_I_off)
-            for _, x, y, polarity in bin_data
-        ])
-        bin_hv = torchhd.normalize(torchhd.multibundle(spatial_hvs))
+        bin_data = torch.tensor(np.array(bin_data, dtype=np.int32), device=self.device)
+        x, y, polarity = bin_data[:, 1], bin_data[:, 2], bin_data[:, 3]
 
-        return bin_hv  # No time HV applied here, it's handled in N-grams
+        if self.time_method == "kxk_ngram":
+            #  Use KxK position encoding from seedEncoder
+            pos_hvs = torch.stack([self.seed_encoder.get_position_hv(int(x_i), int(y_i)) for x_i, y_i in zip(x, y)])
+        else:
+            pos_hvs = self.get_pos_hv(x, y)
+
+        H_I_on_expanded = self.H_I_on.expand(len(polarity), self.dims)
+        H_I_off_expanded = self.H_I_off.expand(len(polarity), self.dims)
+
+        pol_hvs = torch.where(polarity.unsqueeze(-1) == 1, H_I_on_expanded, H_I_off_expanded)
+
+        spatial_hvs = torchhd.bind(pos_hvs, pol_hvs)
+
+        return (torchhd.multibundle(spatial_hvs))
 
     def encode_window(self, window_data):
-        """Encodes an entire window by forming and binding N-grams from bins."""
+        """Encodes an entire window using N-grams."""
         bins = [(bin_data, idx) for idx, bin_data in enumerate(window_data) if len(bin_data) > 0]
-
         if len(bins) < self.n_gram:
-            print(f"[ERROR] Not enough bins for N-gram encoding ({len(bins)}/{self.n_gram}). Skipping window...")
-            return None
+            return None  # Skip if not enough bins for an N-gram
 
         return self._process_ngrams(bins)
 
     def _process_ngrams(self, bins):
-        """Creates N-grams and bundles them together for final encoding."""
-        window_hv = torch.zeros(self.dims, device=self.device)
+        """
+        Applies n-gram encoding to temporal bins using torchhd.ngrams() and bundles results for the entire window.
 
-        for i in range(len(bins) - self.n_gram + 1):
-            gram_hvs = [self.encode_bin(bin_data, idx) for bin_data, idx in bins[i:i + self.n_gram]]
-            gram_hvs = [hv for hv in gram_hvs if hv is not None]
+        Args:
+            bins (list): List of (bin_data, time_idx) tuples
 
-            if len(gram_hvs) == 0:
-                print(f"[WARNING] Skipping empty N-gram at index {i}")
-                continue
+        Returns:
+            torch.Tensor: Encoded hypervector for the n-grams, or None if invalid
+        """
+        if len(bins) < self.n_gram:
+            if self.debug:
+                print(f"[WARNING] Not enough bins for full n-gram (Need {self.n_gram}, got {len(bins)})")
+            return None  # Skip if not enough bins
 
-            # Bind the N-gram sequence together to encode temporal order
-            gram_hv = torchhd.multibind(torch.stack(gram_hvs))
-            window_hv = torchhd.bundle(window_hv, gram_hv)
+        # Encode all bins first
+        bin_hvs = []
+        for bin_data, idx in bins:
+            bin_hv = self.encode_bin(bin_data, idx)
+            if bin_hv is not None:
+                bin_hvs.append(bin_hv)
+            else:
+                if self.debug:
+                    print(f"[DEBUG NGRAM] Skipping empty bin at time {idx}")
 
-        return torchhd.normalize(window_hv) if window_hv.norm() > 0 else None
+        if len(bin_hvs) < self.n_gram:
+            if self.debug:
+                print(f"[WARNING] Skipping window: Only {len(bin_hvs)} valid bins, needs at least {self.n_gram}")
+            return None  # Skip incomplete N-grams
+
+        #  Ensure `bin_hvs` is a tensor before passing to `ngrams()`
+        stacked_hvs = torch.stack(bin_hvs)  # Shape: (T, dims)
+
+        # Apply N-grams encoding
+        ngram_hvs = torchhd.ngrams(stacked_hvs, n=self.n_gram)  # Expected shape: (T - n + 1, dims)
+
+        # Fix: Handle case where only a single N-gram is returned
+        if ngram_hvs.dim() == 1:  # If there’s only one hypervector
+            window_hv = ngram_hvs  # No need to bundle
+        else:
+            window_hv = torchhd.multiset(ngram_hvs)  # Ensures proper bundling
+
+        if self.debug:
+            print(f"[DEBUG NGRAM] Processed {len(bin_hvs)} valid bins into {self.n_gram}-grams")
+            print(f"[DEBUG NGRAM] ngram_hvs shape: {ngram_hvs.shape}")
+
+        return torchhd.normalize(window_hv)
 
     def process_windows(self, full_events, class_id):
-        """Splits the event sequence into windows, encodes them, and returns a list of encoded hypervectors."""
+        """Splits event sequence into sliding windows, encodes them, and clears cache after each sample."""
         event_hvs = []
         total_events = len(full_events)
         first_t = full_events[0][0] if total_events > 0 else 0
@@ -114,14 +169,10 @@ class Raw_events_HDEncoder_Enhanced:
         print(f"      - Total Duration: {total_duration} ms")
         print(f"      - Expected Windows: {expected_windows}")
 
-        # Sequentially number bins to prevent gaps
-        sorted_time_stamps = sorted(set([t // self.time_subwindow for t, _, _, _ in full_events]))
-        time_bin_map = {t: i + 1 for i, t in enumerate(sorted_time_stamps)}
-
         # Assign events to time bins
         temporal_dict = defaultdict(list)
         for t, x, y, polarity in full_events:
-            time_bin = time_bin_map[t // self.time_subwindow]
+            time_bin = t // self.time_subwindow
             temporal_dict[time_bin].append((t, x, y, polarity))
 
         sorted_bins = sorted(temporal_dict.keys())
@@ -132,5 +183,16 @@ class Raw_events_HDEncoder_Enhanced:
             if window_hv is not None:
                 event_hvs.append(window_hv)
 
+            # **Clear caches after each window**
+            self.clear_temporary_cache()
+
         print(f"[INFO] Sample {class_id} - Created: {len(event_hvs)} windows\n")
         return event_hvs
+
+    def clear_temporary_cache(self):
+        """Clears all temporary computed hypervectors while keeping essential seed hypervectors."""
+        self.time_hv_cache.clear()  # Clear stored time hypervectors
+        self.pixel_hvs.clear()  # Clear spatial hypervectors (except seed ones)
+        gc.collect()
+
+        print("[DEBUG] Cleared temporary caches after processing window.")

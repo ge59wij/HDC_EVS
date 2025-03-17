@@ -16,27 +16,239 @@ import torchmetrics
 import datetime
 import json
 import resource
-resource.setrlimit(resource.RLIMIT_AS, (2_000_000_000, 2_000_000_000))  # 2GB limit
+import psutil
+import time  # Import at the top
+# Get total system memory
+total_memory = psutil.virtual_memory().total
+safe_limit = int(total_memory * 0.9) # of total RAM
+
+resource.setrlimit(resource.RLIMIT_AS, (safe_limit, safe_limit))
+print(f"Memory limit set to: {safe_limit / 1e9:.1f} GB")
 
 BACKGROUND_LABEL = 404
 LOGS_DIR = "/space/chair-nas/tosy/logs_encodings_histogram/"
-dataset_path = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/Bin Labeled/"
-Train_split = "VAL BIN LABELED"
+train_dataset = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/"
+#dataset_path = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/Bin Labeled/"
+Train_split = "train"
+#Train_split = "VAL BIN LABELED"
 test_dataset = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/test/"
 NUM_TRAIN_METHODS = ["centroid", "adaptive", "iterative"]
 
 
 
 DEBUG_MODE = False
-K = 8
-DEFAULT_HEATMAP_SAMPLES = 30  # Maximum samples per class for similarity calculations
-DIMS = 4000  ##at least 500 for permuation/thermometer
-EVENT_THRESHOLD = 0 / 16  # if below this, then counted as no gesture #for bin labeling in the test data and encoding
-WINDOW_SIZE = 100
-NGRAM_SIZE = 10
-OVERLAP = 2
-method_encoding = "eventhd_timepermutation"  # "thermometer" or "linear" or "eventhd_timeinterpolation" "eventhd_timepermutation"
+K = 20
+DEFAULT_HEATMAP_SAMPLES = 25  # Maximum samples per class for similarity calculations
+DIMS = 6000  ##at least 500 for permuation/thermometer
+EVENT_THRESHOLD = 6 / 16  # if below this, then counted as no gesture #for bin labeling in the test data and encoding
+WINDOW_SIZE = 40
+NGRAM_SIZE = 9
+OVERLAP = 10
+method_encoding = "linear"  # "thermometer" or "linear" or kxk_ngram or "eventhd_timeinterpolation" "eventhd_timepermutation" "stem_hd"
+test_number= 30
+train_number = 500
 
+def main(skip_training):
+    torch.manual_seed(40)
+    np.random.seed(40)
+    random.seed(40)
+    global test_dataset
+    global train_dataset
+    skip_training = False
+    device = "cpu"
+    print(f"Using device: {device}")
+    print("\n[INFO] Loading datasets...")
+
+    train_files = load_dataset(train_dataset + Train_split, is_test=True, max_samples = train_number)
+    train_dataset = HDF5Dataset(train_files)
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
+
+    if not skip_training:
+        test_files = load_dataset(test_dataset, is_test=True, max_samples=test_number)
+        print(f"[INFO] Loaded {len(train_dataset)} training files and {len(test_files)} test files")
+        test_dataset = HDF5Dataset(test_files)
+        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
+
+    run_dir = create_run_directory()
+
+    # Save Parameters Before Training
+    params = {
+        "DIMS": DIMS,
+        "EVENT_THRESHOLD": EVENT_THRESHOLD,
+        "WINDOW_SIZE": WINDOW_SIZE,
+        "NGRAM_SIZE": NGRAM_SIZE,
+        "OVERLAP": OVERLAP,
+        "NUM_TRAIN_METHODS": NUM_TRAIN_METHODS,
+        "method_encoding": method_encoding,
+        "K EVENTHD": K,
+        "DEFAULT_HEATMAP_SAMPLES": DEFAULT_HEATMAP_SAMPLES,
+    }
+
+    debug2 = False
+    if debug2:
+        for idx in range(len(train_dataset)):
+            event_data, class_ids, file_path = train_dataset[idx]  # Unpack dataset item
+            print(f"[INFO] Train Sample {idx}: Class ID = {class_ids.numpy()} from {file_path}")
+        for idx in range(len(test_dataset)):
+            event_data, class_ids, file_path = test_dataset[idx]  # Unpack dataset item
+            print(f"[INFO] Test Sample {idx}: Class ID = {class_ids.numpy()} from {file_path}")
+
+    print("\n[INFO] Initializing HISTEncoder...")
+    encoder = HISTEncoder(height=120,width=160,dims=DIMS,device=device,window_size=WINDOW_SIZE,n_gram=NGRAM_SIZE,threshold=EVENT_THRESHOLD,method_encoding=method_encoding,K=K,debug=DEBUG_MODE)
+
+    # Encode training dataset
+    print("\n[INFO] Encoding training dataset...")
+    start_encoding_time = time.time()
+    train_vectors, train_labels = encode_dataset(train_loader, encoder, debug=DEBUG_MODE)
+    encoding_time_train = time.time() - start_encoding_time  # Capture time
+
+    print(f"\n[INFO] Model encoding completed in {encoding_time_train:.2f} seconds.")
+
+
+    print("\n[INFO] Computing intra/inter-class similarities (Heatmap)...")
+    intra_sim, inter_sim = compute_intra_inter_class_similarities(
+        train_vectors, train_labels, run_dir=run_dir, filename="vector_similarity_heatmap.png",
+        sample_limit=DEFAULT_HEATMAP_SAMPLES, debug=True
+    )
+    print("\n[INFO] Computing additional similarity metrics...")
+    compute_additional_metrics(train_vectors, train_labels, run_dir, sample_limit=DEFAULT_HEATMAP_SAMPLES)
+
+    print("\n[INFO] Creating t-SNE visualization of training vectors...")
+    visualize_hypervectors(train_vectors, train_labels, run_dir, "vector_tsne_train.png")
+
+    if skip_training:
+        print("\n[INFO] Skipping training as requested.")
+        return
+
+    print("\n[INFO] Training models...")
+    start_training_time = time.time()
+
+    models = {}
+    for method in NUM_TRAIN_METHODS:
+        print(f"\n[TRAINING] Training model using {method} method...")
+        models[method] = train_model(train_vectors, train_labels, method, debug=DEBUG_MODE)
+
+    training_time = time.time() - start_training_time  # Capture time
+
+    print("\n[INFO] Encoding test dataset...")
+    start_encoding_time_test = time.time()
+
+    test_vectors, test_labels = encode_dataset(test_loader, encoder, debug=DEBUG_MODE)
+
+    encoding_time_test = time.time() - start_encoding_time_test  # Capture time
+    print(f"\n[INFO] Test dataset encoded in {encoding_time_test:.2f} seconds.")
+
+    print("\n[INFO] Creating t-SNE visualization of test vectors...")
+    visualize_hypervectors(test_vectors, test_labels, run_dir, "vector_tsne_test.png")
+
+    print("\n[INFO] Evaluating models...")
+
+    results = {}
+    for method, model in models.items():
+        results[method] = evaluate_model(model, test_vectors, test_labels, method)
+
+    print("\n[INFO] Comparing model performances:")
+    for method, result in results.items():
+        print(f"  - {method}: {result['accuracy']:.2f}% accuracy")
+    # ✅ Generate heatmap for training data
+    print("\n[INFO] Generating cosine similarity heatmap for training data...")
+    plot_heatmap(train_vectors, train_labels, run_dir, split_name="train")
+    print("\n[INFO] Generating cosine similarity heatmap for test data...")
+    plot_heatmap(test_vectors, test_labels, run_dir, split_name="test")
+
+    save_run_info(run_dir, params, intra_sim, results, encoding_time_train, encoding_time_test)
+
+    print("\n[INFO] Pipeline completed successfully!")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def plot_heatmap(vectors, labels, run_dir, sample_limit=DEFAULT_HEATMAP_SAMPLES, encoding_method=method_encoding, save=True, split_name="train"):
+    """
+    Plots and saves a cosine similarity heatmap ensuring equal selection from all available classes.
+
+    Args:
+        vectors (torch.Tensor): Encoded hypervectors
+        labels (list): Class labels for each vector
+        run_dir (str): Directory to save the heatmap
+        sample_limit (int): Maximum number of samples per class to use
+        encoding_method (str): Encoding method used
+        save (bool): Whether to save the heatmap
+        split_name (str): "train" or "test" split
+    """
+    class_labels_tensor = torch.tensor(labels)
+    unique_classes = torch.unique(class_labels_tensor).tolist()
+    num_classes = len(unique_classes)
+
+    # **Compute how many samples per class (rounded)**
+    samples_per_class = max(1, sample_limit // num_classes)  # Ensure at least 1 sample per class
+    class_to_samples = defaultdict(list)
+
+    # **Group sample indices by class**
+    for idx, label in enumerate(class_labels_tensor.tolist()):
+        class_to_samples[label].append(idx)
+
+    selected_indices = []
+
+    # **Step 1: Select equal samples per class**
+    for cls in unique_classes:
+        available_samples = class_to_samples[cls]
+        selected_indices.extend(available_samples[:samples_per_class])  # Take `samples_per_class` from each class
+
+    # **Step 2: If not enough samples were selected, fill the remaining slots**
+    while len(selected_indices) < sample_limit:
+        for cls in unique_classes:
+            if len(selected_indices) < sample_limit and class_to_samples[cls]:
+                selected_indices.append(class_to_samples[cls].pop(0))  # Add extra sample if available
+
+    # **Final check: Trim excess samples**
+    selected_indices = selected_indices[:sample_limit]
+
+    # **Sort for better visualization**
+    selected_indices = torch.tensor(sorted(selected_indices))
+    selected_vectors = vectors[selected_indices]
+    selected_labels = class_labels_tensor[selected_indices].tolist()
+
+    # Compute cosine similarity for selected samples
+    similarity_matrix = torchhd.cosine_similarity(selected_vectors, selected_vectors).cpu().numpy()
+
+    # Plot heatmap
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        similarity_matrix, annot=False, cmap="coolwarm",
+        xticklabels=selected_labels, yticklabels=selected_labels,
+        cbar=True, square=True, linewidths=0.5
+    )
+
+    plt.title(f"Cosine Similarity Heatmap ({split_name}) | {encoding_method}")
+    plt.xlabel("Sample Index (Class ID)")
+    plt.ylabel("Sample Index (Class ID)")
+
+    print(f"[INFO] Selected {len(selected_indices)} samples with {samples_per_class} per class (Adjusted as needed).")
+
+    # **Show plot non-blocking**
+    plt.draw()
+    plt.pause(1)
+    # Save plot
+    if save and run_dir:
+        plot_path = os.path.join(run_dir, f"{split_name}_balanced_heatmap.png")
+        plt.savefig(plot_path)
+        print(f"[INFO] Saved heatmap to {plot_path}")
+
+    plt.close()
 
 def create_run_directory():
     """Creates a unique directory for each run and returns its path."""
@@ -45,27 +257,42 @@ def create_run_directory():
     os.makedirs(run_dir, exist_ok=True)
     return run_dir
 def bin_labeling(files):
-    """Processes the test dataset and labels each bin based on event count."""
+    """Processes the test dataset and assigns a class label to each bin based on event count."""
     print("\n[INFO] Processing test dataset for per-bin labeling...")
     labeled_files = []
+
     for file in tqdm(files, desc="Labeling Bins"):
         with h5py.File(file, "r+") as f:
-            event_data = f["data"][:]  # Shape: (T, 2, H, W)
+            event_data = f["data"][:]  # Shape: (T, 2, H, W)  -> (time bins, polarity, height, width)
             class_id = f["class_id"][()]  # Integer class label for full sample
+
+            # Compute total events per bin
             total_events_per_bin = np.sum(event_data, axis=(1, 2, 3))  # Shape: (T,)
+
+            # Assign class_id to each bin (assuming all bins get the same class for now)
+            #bin_labels = np.full_like(total_events_per_bin, class_id, dtype=np.int32)  # Shape: (T,)
+
+            # If a threshold-based background label is needed:
             bin_labels = np.where(total_events_per_bin < EVENT_THRESHOLD, BACKGROUND_LABEL, class_id)
+
+            # Overwrite or create "labels" dataset in HDF5 file
             if "labels" in f:
-                del f["labels"]  # Delete existing labels if present
+                del f["labels"]  # Remove existing labels if present
             f.create_dataset("labels", data=bin_labels, dtype="int32")
+
             labeled_files.append(file)
+
     print("[INFO] Test dataset labeling complete!")
     return labeled_files
-def load_dataset(dataset_folder, is_test=False, max_test_samples=30):
-    """Loads dataset and applies bin labeling if test."""
+def load_dataset(dataset_folder, is_test, max_samples):
+    """Loads dataset and applies bin labeling if test, with random sampling."""
     files = [os.path.join(dataset_folder, f) for f in os.listdir(dataset_folder) if f.endswith('.h5')]
-    if is_test:
-        files = bin_labeling(files[:max_test_samples])
+    # Shuffle files to ensure random selection
+    random.shuffle(files)
+    #if is_test:
+    files = bin_labeling(files[:max_samples])
     return files
+
 def process_sample(event_data, class_ids, encoder, sample_name, debug):
     """
     Encodes event data into hypervectors using sliding windows.
@@ -110,7 +337,6 @@ def process_sample(event_data, class_ids, encoder, sample_name, debug):
                 label_counts = torch.bincount(valid_labels)
                 id_class = label_counts.argmax().item()
                 gesture_hvs.append((gesture_hv, id_class))
-
                 if debug:
                     print(f"[WINDOW] Successfully encoded window with class ID: {id_class}")
         else:
@@ -123,20 +349,34 @@ def process_sample(event_data, class_ids, encoder, sample_name, debug):
         print(f"[SAMPLE] Created {len(gesture_hvs)} encoded windows")
 
     return gesture_hvs if gesture_hvs else [(torch.zeros(encoder.dims), -1)]
-def save_run_info(run_dir, params, metrics, results):
+def save_run_info(run_dir, params, metrics, results, encoding_time_train, encoding_time_test):
     """Saves run parameters and final results in the given run directory."""
     filename = os.path.join(run_dir, "run_info.json")
+
+    model_accuracies = {method: results[method]["accuracy"] for method in results}
 
     run_data = {
         "parameters": params,
         "metrics": metrics,
-        "model_results": results
+        "model_accuracies": model_accuracies,
+        "model_results": results,
+        "execution_times": {
+            "encoding_train": encoding_time_train,
+            "encoding_test": encoding_time_test,
+
+        }
     }
+
+    # Convert tensors before saving
+    for method in results:
+        if "confusion" in results[method]:
+            results[method]["confusion"] = results[method]["confusion"].tolist()
 
     with open(filename, "w") as f:
         json.dump(run_data, f, indent=4)
 
     print(f"[INFO] Run details saved to {filename}")
+
 class HDF5Dataset(Dataset):
     def __init__(self, file_list):
         self.files = file_list
@@ -187,10 +427,10 @@ def encode_dataset(dataloader, encoder, debug):
         for hv, cls in valid_hvs:
             encoded_vectors.append(hv)
             class_labels.append(cls)
+    print(f"[DEBUG] Unique encoded classes: {set(class_labels)}")
 
     if not encoded_vectors:
         raise ValueError("No valid hypervectors were generated from the dataset")
-
     return torch.stack(encoded_vectors), class_labels
 def train_model(encoded_vectors, class_labels, method, debug):
     """Trains a model using different methods."""
@@ -209,18 +449,29 @@ def train_model(encoded_vectors, class_labels, method, debug):
             class_counts[cls] += 1
         print(f"[TRAINING] Vectors per class: {dict(class_counts)}")
 
+    # Initialize Centroid-based model
     model = Centroid(DIMS, num_classes)
     labels_tensor = torch.tensor(class_labels, dtype=torch.long)
 
     with torch.no_grad():
         if method == "centroid":
             model.add(encoded_vectors, labels_tensor)
-        elif method == "adaptive":
-            model.add_adapt(encoded_vectors, labels_tensor, lr=0.5)
-        elif method == "iterative":
-            model.add_online(encoded_vectors, labels_tensor, lr=0.5)
 
-    model.normalize()
+        elif method == "adaptive":
+            # **Iterate for AdaptHD**
+            for epoch in range(10):  # Increase epochs if needed
+                model.add_adapt(encoded_vectors, labels_tensor, lr=0.7)
+                if debug:
+                    print(f"[TRAINING] AdaptHD Epoch {epoch+1} Update Done")
+
+        elif method == "iterative":
+            # **Iterate for OnlineHD**
+            for epoch in range(10):  # Increase passes for better refinement
+                model.add_online(encoded_vectors, labels_tensor, lr=0.7)
+                if debug:
+                    print(f"[TRAINING] OnlineHD Epoch {epoch+1} Update Done")
+
+    model.normalize()  # Normalize the final prototypes
 
     if debug:
         # Evaluate on training data
@@ -232,31 +483,13 @@ def train_model(encoded_vectors, class_labels, method, debug):
             print(f"[TRAINING] Training accuracy: {acc:.2f}%")
 
     return model
-
-
 def compute_intra_inter_class_similarities(vectors, labels, run_dir, filename="similarity_heatmap.png",
                                            sample_limit=DEFAULT_HEATMAP_SAMPLES, debug=False):
-    """
-    Computes class-wise intra/inter similarities with detailed per-class analysis.
-
-    Args:
-        vectors (torch.Tensor): Encoded hypervectors
-        labels (list): Class labels
-        run_dir (str): Directory to save visualizations
-        filename (str): Filename for the heatmap
-        sample_limit (int): Maximum number of samples per class to use for similarity computation
-        debug (bool): Enable detailed debugging
-
-    Returns:
-        tuple: (intra_sim, inter_sim)
-    """
     unique_classes = sorted(list(set(labels)))
 
-    # Group vectors by class and limit samples per class if needed
     class_vectors = {}
     for cls in unique_classes:
         cls_indices = [i for i, label in enumerate(labels) if label == cls]
-        # Limit to sample_limit vectors per class
         if len(cls_indices) > sample_limit:
             cls_indices = cls_indices[:sample_limit]
         class_vectors[cls] = vectors[cls_indices]
@@ -265,34 +498,28 @@ def compute_intra_inter_class_similarities(vectors, labels, run_dir, filename="s
     inter_sim = {}
 
     if debug:
-        print("\n[SIMILARITY] Intra-Class and Inter-Class Similarity Analysis:")
-        print(f"[SIMILARITY] Using up to {sample_limit} samples per class")
+        print(f"\n[SIMILARITY] Computing with up to {sample_limit} samples per class.")
 
     # Compute intra-class similarities
     for cls, vecs in class_vectors.items():
-        if len(vecs) > 1:  # Need at least 2 vectors to compute similarity
-            # Compute all pairwise similarities within class
+        if len(vecs) > 1:
             sim_matrix = torchhd.cosine_similarity(vecs, vecs)
-            # Exclude self-similarities (diagonal)
             mask = ~torch.eye(len(vecs), dtype=torch.bool)
-            intra = sim_matrix[mask].mean().item()
-            intra_sim[cls] = intra
+            intra_sim[cls] = sim_matrix[mask].mean().item()
             if debug:
-                print(f"  - Class {cls}: Intra-Class Similarity: {intra:.3f} ({len(vecs)} vectors)")
+                print(f"  - Class {cls}: Intra-Class Similarity: {intra_sim[cls]:.3f}")
 
     # Compute inter-class similarities
     for cls in unique_classes:
         inter_sim[cls] = {}
         for other_cls in unique_classes:
-            if cls != other_cls and len(class_vectors[cls]) > 0 and len(class_vectors[other_cls]) > 0:
-                inter = torchhd.cosine_similarity(
-                    class_vectors[cls], class_vectors[other_cls]
-                ).mean().item()
+            if cls != other_cls:
+                inter = torchhd.cosine_similarity(class_vectors[cls], class_vectors[other_cls]).mean().item()
                 inter_sim[cls][other_cls] = inter
                 if debug:
-                    print(f"    - Class {cls} vs. Class {other_cls}: Inter-Class Similarity: {inter:.3f}")
+                    print(f"  - {cls} vs. {other_cls}: Inter-Class Similarity: {inter:.3f}")
 
-    # Create and save similarity heatmap
+    # Save sorted heatmap
     plot_path = os.path.join(run_dir, filename)
     create_similarity_heatmap(intra_sim, inter_sim, plot_path)
 
@@ -339,41 +566,30 @@ def create_similarity_heatmap(intra_sim, inter_sim, plot_path):
     plt.close()
     print(f"[VISUALIZATION] Similarity heatmap saved to: {plot_path}")
 
+def visualize_hypervectors(encoded_vectors, class_labels, run_dir, filename="hypervector_visualization.png"):
+    """Plots and saves t-SNE visualization for all samples."""
+    tsne = TSNE(n_components=2, perplexity=5, random_state=42)
+    encoded_vectors = np.array(encoded_vectors)  # Convert list to NumPy array
+    reduced_vectors = tsne.fit_transform(encoded_vectors)
 
-def visualize_hypervectors(vectors, labels, run_dir, filename="hypervector_visualization.png"):
-    """Projects hypervectors to 2D using t-SNE and visualizes them."""
-    print("[VISUALIZATION] Projecting hypervectors to 2D using t-SNE...")
+    # Plot t-SNE scatter
+    plt.figure(figsize=(8, 6))
+    unique_classes = np.unique(class_labels)
+    colors = ["red", "blue", "green", "purple", "orange"]
+    palette = {cls: colors[i % len(colors)] for i, cls in enumerate(unique_classes)}
 
-    # Convert to numpy for t-SNE
-    vectors_np = vectors.detach().cpu().numpy()
-
-    # Apply t-SNE dimensionality reduction
-    tsne = TSNE(n_components=2, perplexity=30, n_iter=1000, random_state=42)
-    embedded = tsne.fit_transform(vectors_np)
-
-    # Create scatter plot
-    plt.figure(figsize=(12, 10))
-    unique_labels = sorted(list(set(labels)))
-    colors = plt.cm.rainbow(np.linspace(0, 1, len(unique_labels)))
-
-    for i, label in enumerate(unique_labels):
-        mask = np.array(labels) == label
+    for class_id in unique_classes:
+        indices = np.where(np.array(class_labels) == class_id)[0]
         plt.scatter(
-            embedded[mask, 0],
-            embedded[mask, 1],
-            c=[colors[i]],
-            label=f"Class {label}",
-            alpha=0.7
+            reduced_vectors[indices, 0], reduced_vectors[indices, 1],
+            label=f"Class {class_id}", color=palette[class_id], alpha=0.7, edgecolors='k'
         )
-    plot_path = os.path.join(run_dir, filename)
-    plt.title("t-SNE Visualization of Gesture Hypervectors")
-    plt.legend()
-    plt.tight_layout()
-    plot_path = os.path.join(run_dir, filename)
-    plt.savefig(plot_path)
-    plt.close()
-    print(f"[VISUALIZATION] Saved t-SNE plot: {plot_path}")
 
+    plt.xlabel("t-SNE Component 1")
+    plt.ylabel("t-SNE Component 2")
+    plt.title("t-SNE Visualization")
+    plt.legend()
+    plt.show()
 
 def evaluate_model(model, encoded_vectors, true_labels, method_name):
     """Evaluates model performance with detailed metrics."""
@@ -442,7 +658,6 @@ def evaluate_model(model, encoded_vectors, true_labels, method_name):
         "class_metrics": class_metrics,
         "confusion": confusion
     }
-
 
 def compute_additional_metrics(vectors, labels, run_dir, sample_limit=DEFAULT_HEATMAP_SAMPLES):
     """
@@ -592,103 +807,6 @@ def compute_additional_metrics(vectors, labels, run_dir, sample_limit=DEFAULT_HE
     print(
         f"    - Average inter-class: {np.mean([pairwise_cosine_matrix[i, j] for i in range(num_classes) for j in range(num_classes) if i != j]):.3f}")
 
-
-def main(skip_training):
-    torch.manual_seed(40)
-    np.random.seed(40)
-    random.seed(40)
-    global test_dataset
-
-    device = "cpu"
-    print(f"Using device: {device}")
-    print("\n[INFO] Loading datasets...")
-    train_files = load_dataset(dataset_path + Train_split)
-
-    if not skip_training:
-        test_files = load_dataset(test_dataset, is_test=True, max_test_samples=30)
-        print(f"[INFO] Loaded {len(train_files)} training files and {len(test_files)} test files")
-        test_dataset = HDF5Dataset(test_files)
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
-
-    run_dir = create_run_directory()
-
-    # Save Parameters Before Training
-    params = {
-        "DIMS": DIMS,
-        "EVENT_THRESHOLD": EVENT_THRESHOLD,
-        "WINDOW_SIZE": WINDOW_SIZE,
-        "NGRAM_SIZE": NGRAM_SIZE,
-        "OVERLAP": OVERLAP,
-        "NUM_TRAIN_METHODS": NUM_TRAIN_METHODS,
-        "method_encoding": method_encoding,
-        "K EVENTHD": K,
-        "DEFAULT_HEATMAP_SAMPLES": DEFAULT_HEATMAP_SAMPLES,
-    }
-
-    train_dataset = HDF5Dataset(train_files)
-
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
-
-    print("\n[INFO] Initializing HISTEncoder...")
-    encoder = HISTEncoder(
-        height=120,
-        width=160,
-        dims=DIMS,
-        device=device,
-        window_size=WINDOW_SIZE,
-        n_gram=NGRAM_SIZE,
-        threshold=EVENT_THRESHOLD,
-        method_encoding=method_encoding,
-        K=K,
-        debug=DEBUG_MODE
-    )
-
-    # Encode training dataset
-    print("\n[INFO] Encoding training dataset...")
-    train_vectors, train_labels = encode_dataset(train_loader, encoder, debug=DEBUG_MODE)
-
-    # Analyze encoded vectors before training
-    print("\n[INFO] Analyzing encoded training vectors...")
-
-    # Calculate intra and inter-class similarities using a limited number of samples per class
-    print(
-        f"\n[INFO] Computing intra/inter-class similarities (limiting to {DEFAULT_HEATMAP_SAMPLES} samples per class)...")
-    intra_sim, inter_sim = compute_intra_inter_class_similarities(train_vectors, train_labels, run_dir=run_dir, filename="vector_similarity_heatmap.png", sample_limit=DEFAULT_HEATMAP_SAMPLES, debug=True)
-
-    # Calculate additional metrics
-    print("\n[INFO] Computing additional similarity metrics...")
-    compute_additional_metrics( train_vectors, train_labels, run_dir=run_dir, sample_limit=DEFAULT_HEATMAP_SAMPLES )
-    print("\n[INFO] Creating t-SNE visualization of encoded vectors...")
-    visualize_hypervectors(train_vectors, train_labels, run_dir, "vector_tsne_visualization.png")
-
-    if skip_training:
-        print("\n[INFO] Skipping training as requested.")
-        return
-    else:
-        # Train models using different methods
-        print("\n[INFO] Training models...")
-        models = {}
-        for method in NUM_TRAIN_METHODS:
-            print(f"\n[TRAINING] Training model using {method} method...")
-            models[method] = train_model(train_vectors, train_labels, method, debug=DEBUG_MODE)
-
-        # Encode test dataset
-        print("\n[INFO] Encoding test dataset...")
-        test_vectors, test_labels = encode_dataset(test_loader, encoder, debug=DEBUG_MODE)
-
-        # Evaluate models
-        print("\n[INFO] Evaluating models...")
-        results = {}
-        for method, model in models.items():
-            results[method] = evaluate_model(model, test_vectors, test_labels, method)
-
-        # Compare model performances
-        print("\n[INFO] Comparing model performances:")
-        for method, result in results.items():
-            print(f"  - {method}: {result['accuracy']:.2f}% accuracy")
-
-        save_run_info(run_dir, params, intra_sim, results)
-        print("\n[INFO] Pipeline completed successfully!")
 
 
 if __name__ == "__main__":

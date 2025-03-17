@@ -3,7 +3,7 @@ import numpy as np
 import h5py
 import cv2
 
-TENSOR_FILE = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/paper_01P_0_0_2250000_4125000.h5"
+TENSOR_FILE = "/space/chair-nas/tosy/DATASETS/Gen3_Chifoumi_H5_HistoQuantized/train/paper_01P_0_0_2250000_4125000.h5"
 LABEL_FILE = TENSOR_FILE.split(".h5")[0] + "_bbox.npy"
 assert os.path.isfile(TENSOR_FILE), "Check your .h5 tensor input path!"
 assert os.path.isfile(LABEL_FILE), "Check your label input path!"

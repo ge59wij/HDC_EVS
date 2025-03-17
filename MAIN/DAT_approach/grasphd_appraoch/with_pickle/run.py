@@ -2,7 +2,7 @@ import threading
 import time
 
 def watch_dog():
-    time.sleep( 7200)  # If main script is still running after x s, exit
+    time.sleep( 10800)  # If main script is still running after x s, exit
     print("Script hung, exiting...")
     exit(1)
 

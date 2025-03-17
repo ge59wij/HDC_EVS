@@ -1,10 +1,14 @@
 import torch
 import torchhd
 import numpy as np
+from collections import defaultdict
+import bisect
+
 np.set_printoptions(suppress=True, precision=8)
 
 class seedEncoder:
-    def __init__(self, height, width, dims, k,time_subwindow,  device, max_time, time_interpolation_method, WINDOW_SIZE_MS, OVERLAP_MS):
+    def __init__(self, height, width, dims, k, time_subwindow, device, max_time, time_interpolation_method, WINDOW_SIZE_MS, OVERLAP_MS):
+        """Initialize seed encoder with spatial and temporal encoding parameters."""
         print("Initializing Seed Encoder:")
         self.height = height
         self.width = width
@@ -12,101 +16,67 @@ class seedEncoder:
         self.time_subwindow = time_subwindow
         self.k = k
         self.device = torch.device(device) if isinstance(device, str) else device
-        self.max_time = WINDOW_SIZE_MS
+        self.max_time = max_time
         self.time_interpolation_method = time_interpolation_method
         self.WINDOW_SIZE_MS = WINDOW_SIZE_MS
         self.OVERLAP_MS = OVERLAP_MS
-
+        self.time_hv_cache = {}
+        # Generate base polarity hypervectors
         self.H_I_on = torchhd.random(1, dims, "MAP", device=self.device).squeeze(0)
         self.H_I_off = -self.H_I_on
-        self._precompute_corners()
-        print(f"| Generated 2 Polarity hvs | Generated Random Corner hvs.")
-        self._generate_time_hvs()
+
+        self._precompute_corners()  # Initialize position-based hypervectors
+        self._generate_time_hvs()  # Initialize time hypervectors
+        print("| Generated Polarity and Position HVs |")
 
     def _generate_time_hvs(self):
-        """Generates time hypervectors based on the selected method."""
-        self.time_hvs = {}  # Dictionary storing all time hypervectors
+        """Precompute time hypervectors for efficient lookup."""
+        self.time_hvs = {}
         num_bins = int(self.max_time // self.time_subwindow) + 2
 
-        if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation" ]:
-            # Generate anchor hypervectors at bin edges
+        if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation"]:
+            # Generate anchor hypervectors at time bin edges
             for i in range(num_bins):
                 time_key = int(i * self.time_subwindow)
                 self.time_hvs[time_key] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
-            print(f"| Using {self.time_interpolation_method}. Generated {num_bins} anchor hypervectors.")
 
-            # Interpolation logic
+            # Interpolation between time hypervectors
             for i in range(num_bins - 1):
                 T_iK = self.time_hvs[i * self.time_subwindow]
                 T_next = self.time_hvs[(i + 1) * self.time_subwindow]
 
                 for t in range(1, self.time_subwindow):
                     alpha = t / self.time_subwindow  # Interpolation factor
-
                     if self.time_interpolation_method == "stem_hd":
-                        # STEMHD: Concatenation-based interpolation (one per bin)
-                        num_from_T_i = int((1 - alpha) * self.dims)
-                        num_from_T_next = self.dims - num_from_T_i
-                        interpolated_hv = torch.cat(
-                            (T_iK[:num_from_T_i], T_next[-num_from_T_next:]), dim=0
-                        )
-
-                    else:  # EventHD time interpolation & GraspHD
-                        # EventHD & GraspHD: Weighted sum per element (multiple interpolated HVs)
+                        interpolated_hv = T_iK.clone()
+                        interpolated_hv[self.dims // 2:] = T_next[-self.dims // 2:]
+                    else:
                         interpolated_hv = (1 - alpha) * T_iK + alpha * T_next
-
-                    interpolated_time = (i * self.time_subwindow) + t
-                    self.time_hvs[interpolated_time] = interpolated_hv  # Store interpolated HVs
+                    self.time_hvs[(i * self.time_subwindow) + t] = interpolated_hv
 
             print(f"| Precomputed {len(self.time_hvs)} total time hypervectors (anchors + interpolations).")
 
         elif self.time_interpolation_method == "event_hd_timepermutation":
-            print(f"| Using Temporal Permutation Encoding EVENTHD |")
-
-
-
-        '''
-        elif self.time_interpolation_method == "encode_temporalpermutation":
-            """Uses identity vectors and shifts them based on time"""
-            # We don't store interpolated time HVs, but instead a base identity HV
-            self.time_hvs[0] = torchhd.identity(1, self.dims, device=self.device)
-            print(f"| Using Temporal Permutation Encoding | Base Identity Vector Initialized")
-        elif self.time_interpolation_method in ["permutation"]:
-            """Uses identity vectors and shifts them based on time"""
-            if 0 not in self.time_hvs:  # Ensure the base identity vector is created
-                self.time_hvs[0] = torchhd.identity(1, self.dims, device=self.device).squeeze(0)
-            print(f"| Using Temporal Permutation Encoding | Base Identity Vector Initialized")
-        '''
+            print("| Using Temporal Permutation Encoding EVENTHD |")
 
     def get_time_hv(self, t):
-        """Retrieves time hypervector using a local windowed timestamp (ensuring every window starts at t=0)."""
+        """Retrieve time hypervector using binary search for efficiency."""
         if not (0 <= t < self.WINDOW_SIZE_MS):
             raise ValueError(f"[ERROR] Event timestamp {t} out of range (0-{self.WINDOW_SIZE_MS})")
-        if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation"]:
-            if t in self.time_hvs:
-                return self.time_hvs[t]
 
-            # Find the closest available key within the current window
-            closest_key = min(self.time_hvs.keys(), key=lambda k: abs(k - t))
-            print(f"[WARNING] Requested time {t} not found! Using closest available: {closest_key}")
-            return self.time_hvs[closest_key]
+        time_keys = list(self.time_hvs.keys())
+        idx = bisect.bisect_left(time_keys, t)
+        if idx == len(time_keys):
+            return self.time_hvs[time_keys[-1]]
+        return self.time_hvs[time_keys[idx]]
 
-
-    #-----------------Spatial-----------------------------------
+    # ----------------- Spatial Encoding -------------------
 
     def _precompute_corners(self):
-        """Precompute corners, virtual corners, and populate cache."""
-        # Generate corner positions with virtual extension
-        self.corner_x_positions = list(range(0, self.width, self.k))
-        self.corner_y_positions = list(range(0, self.height, self.k))
+        """Precompute position hypervectors at fixed grid locations."""
+        self.corner_x_positions = list(range(0, self.width, self.k)) + [self.width]
+        self.corner_y_positions = list(range(0, self.height, self.k)) + [self.height]
 
-        # Extend to virtual corners if needed
-        if self.width % self.k != 0:
-            self.corner_x_positions.append(self.width)
-        if self.height % self.k != 0:
-            self.corner_y_positions.append(self.height)
-
-        # Generate corner grid
         self.corner_grid = torch.empty(
             (len(self.corner_x_positions), len(self.corner_y_positions), self.dims),
             device=self.device
@@ -115,92 +85,48 @@ class seedEncoder:
             for j, y in enumerate(self.corner_y_positions):
                 self.corner_grid[i, j] = torchhd.random(1, self.dims, "MAP", device=self.device)
 
-        # Preload corners into cache
         self.x_to_index = {x: i for i, x in enumerate(self.corner_x_positions)}
         self.y_to_index = {y: j for j, y in enumerate(self.corner_y_positions)}
-        self.position_hvs_cache = {
-            (x, y): self.corner_grid[i, j]
-            for i, x in enumerate(self.corner_x_positions)
-            for j, y in enumerate(self.corner_y_positions)
-        }
+
+        # **Dictionary-based caching for position HVs**
+        self.position_hvs_cache = {}
+
+    def get_position_hv(self, x, y):
+        """Retrieve or generate Position HV using dictionary-based caching (efficient for large-scale spatial encoding)."""
+        key = (int(x), int(y))
+
+        if key not in self.position_hvs_cache:
+            self.position_hvs_cache[key] = self._interpolate_hv(x, y)
+
+        return self.position_hvs_cache[key]
 
     def _interpolate_hv(self, x, y):
-        """Interpolates the hypervector at (x, y) using weighted sum of neighboring corner hypervectors."""
+        """Interpolates position hypervectors for continuous spatial encoding."""
+        x = min(max(x, 0), self.width)
+        y = min(max(y, 0), self.height)
 
-        # Clamp coordinates to grid bounds
-        x_clamped = min(max(x, 0), self.width)
-        y_clamped = min(max(y, 0), self.height)
-
-        # Find surrounding corners
-        i = max(0, np.searchsorted(self.corner_x_positions, x_clamped) - 1)
-        j = max(0, np.searchsorted(self.corner_y_positions, y_clamped) - 1)
+        i = max(0, np.searchsorted(self.corner_x_positions, x) - 1)
+        j = max(0, np.searchsorted(self.corner_y_positions, y) - 1)
 
         i_next = min(i + 1, len(self.corner_x_positions) - 1)
         j_next = min(j + 1, len(self.corner_y_positions) - 1)
 
-        # Get corner coordinates
-        x0, x1 = self.corner_x_positions[i], self.corner_x_positions[i_next]
-        y0, y1 = self.corner_y_positions[j], self.corner_y_positions[j_next]
+        P00 = self.corner_grid[self.x_to_index[self.corner_x_positions[i]], self.y_to_index[self.corner_y_positions[j]]]
+        P10 = self.corner_grid[self.x_to_index[self.corner_x_positions[i_next]], self.y_to_index[self.corner_y_positions[j]]]
+        P01 = self.corner_grid[self.x_to_index[self.corner_x_positions[i]], self.y_to_index[self.corner_y_positions[j_next]]]
+        P11 = self.corner_grid[self.x_to_index[self.corner_x_positions[i_next]], self.y_to_index[self.corner_y_positions[j_next]]]
 
-        # Retrieve HVs from precomputed corner grid
-        P00 = self.corner_grid[self.x_to_index[x0], self.y_to_index[y0]]
-        P10 = self.corner_grid[self.x_to_index[x1], self.y_to_index[y0]]
-        P01 = self.corner_grid[self.x_to_index[x0], self.y_to_index[y1]]
-        P11 = self.corner_grid[self.x_to_index[x1], self.y_to_index[y1]]
+        dx = max(self.corner_x_positions[i_next] - self.corner_x_positions[i], 1e-9)
+        dy = max(self.corner_y_positions[j_next] - self.corner_y_positions[j], 1e-9)
+        lambda_x = (x - self.corner_x_positions[i]) / dx
+        lambda_y = (y - self.corner_y_positions[j]) / dy
 
-        dx = max(x1 - x0, 1e-9)
-        dy = max(y1 - y0, 1e-9)
-        lambda_x = (x_clamped - x0) / dx  # Weight for x-direction
-        lambda_y = (y_clamped - y0) / dy  # Weight for y-direction
-
-        # Apply weighted sum per dimension (instead of concatenation)
-        position_hv = (
-                (1 - lambda_x) * (1 - lambda_y) * P00 +
-                lambda_x * (1 - lambda_y) * P10 +
-                (1 - lambda_x) * lambda_y * P01 +
-                lambda_x * lambda_y * P11
+        return (
+            (1 - lambda_x) * (1 - lambda_y) * P00 +
+            lambda_x * (1 - lambda_y) * P10 +
+            (1 - lambda_x) * lambda_y * P01 +
+            lambda_x * lambda_y * P11
         )
-
-        assert position_hv.shape[0] == self.dims, f"Size mismatch! Expected {self.dims}, got {position_hv.shape[0]}"
-        return position_hv
-
-    def get_position_hv(self, x, y):
-        """ Retrieve or generate Position HV.
-            Checks cache (position_hvs_cache), if doesn't exist: Interpolate then cache.
-        """
-
-        # Clamp coordinates to grid
-        x_clamped = min(max(x, 0), self.width)
-        y_clamped = min(max(y, 0), self.height)
-        key = (x_clamped, y_clamped)
-
-        # Check cache first
-        if key in self.position_hvs_cache:
-            return self.position_hvs_cache[key]
-        '''
-        # Check if it's a precomputed corner
-        if (x_clamped in self.x_to_index) and (y_clamped in self.y_to_index):
-            i = self.x_to_index[x_clamped]
-            j = self.y_to_index[y_clamped]
-            hv = self.corner_grid[i, j]
-        else:
-        '''
-        # If not found in cache, interpolate it and store it
-        hv = self._interpolate_hv(x_clamped, y_clamped)
-        self.position_hvs_cache[key] = hv  # Cache the interpolated result
-        return hv
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
