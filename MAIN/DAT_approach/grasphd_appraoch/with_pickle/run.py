@@ -9,5 +9,4 @@ def watch_dog():
 watchdog = threading.Thread(target=watch_dog, daemon=True)
 watchdog.start()
 
-# Run your script here
 exec(open("/space/chair-nas/tosy/PycharmProjects/Thesis_Implementation/MAIN/DAT_approach/grasphd_appraoch/with_pickle/main_enc.py").read())

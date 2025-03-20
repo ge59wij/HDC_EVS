@@ -30,14 +30,14 @@ for i in range(len(bins) - 1):
     frames.append((x_coords[mask], y_coords[mask], polarities[mask]))
 
 # Plot the frames
-num_frames = min(len(frames), 6)  # Show first 6 bins (or fewer if less data)
-fig, axes = plt.subplots(1, num_frames, figsize=(12, 6))
+num_frames = min(len(frames), 4)
+fig, axes = plt.subplots(1, num_frames, figsize=(12, 5))
 
 for i in range(num_frames):
     ax = axes[i]
     x, y, p = frames[i]
-    ax.scatter(x[p == 1], y[p == 1], s=1, color="blue", label="ON Events")
-    ax.scatter(x[p == 0], y[p == 0], s=1, color="red", label="OFF Events")
+    ax.scatter(x[p == 1], y[p == 1], s=15, color="blue", label="ON Events")
+    ax.scatter(x[p == 0], y[p == 0], s=15, color="red", label="OFF Events")
 
     ax.set_xlim(0, sensor_size[1])  # Width
     ax.set_ylim(0, sensor_size[0])  # Height
@@ -45,6 +45,6 @@ for i in range(num_frames):
     ax.set_title(f"Bin {i+1}/{num_frames} ({bins[i]/1000:.1f}ms)")
     ax.axis("off")
 
-fig.suptitle(f"NMNIST Sample (Class {label})", fontsize=14)
+fig.suptitle(f"NMNIST Sample (Class {label})", fontsize=18)
 plt.tight_layout()
 plt.show()

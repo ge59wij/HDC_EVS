@@ -9,7 +9,7 @@ from HIST_Encoder import HISTEncoder
 import random
 import resource
 import psutil
-from MAIN.DAT_approach.grasphd_appraoch.with_pickle.main_enc import (
+from MAIN.util import (
     create_unique_run_folder, _test_model, train_model, plot_heatmap,
     plot_tsne, plot_confusion_matrix, save_hyperparameters, encode_dataset)
 

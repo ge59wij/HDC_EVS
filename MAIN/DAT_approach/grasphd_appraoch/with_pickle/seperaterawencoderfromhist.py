@@ -3,16 +3,16 @@ import torchhd
 import numpy as np
 from collections import defaultdict
 import gc
-from grasphdencoding_seedhvs import seedEncoder  # Import the existing seedEncoder
-
+from MAIN.DAT_approach.grasphd_appraoch.with_pickle.grasphdencoding_seedhvs import seedEncoder
 
 np.set_printoptions(suppress=True, precision=8)
+debug = False
 
 class Raw_events_HDEncoder_Enhanced:
-    def __init__(self, height, width, dims, time_subwindow, k, device, max_time, time_method, WINDOW_SIZE_MS, OVERLAP_MS):
+    def __init__(self, height, width, dims, time_subwindow, k, device, max_time, time_method, WINDOW_SIZE_MS, OVERLAP_MS,ngram):
         """Initialize encoder with spatial and temporal encoding parameters."""
-        print("Initializing Raw Events HD Encoder...")
-        self.n_gram = 5
+        print("Initializing Raw Events HD Encoder...") if debug else None
+        self.n_gram = ngram
         self.height = height
         self.width = width
         self.dims = dims
@@ -117,7 +117,7 @@ class Raw_events_HDEncoder_Enhanced:
         """
         if len(bins) < self.n_gram:
             if self.debug:
-                print(f"[WARNING] Not enough bins for full n-gram (Need {self.n_gram}, got {len(bins)})")
+                print(f"[WARNING] Not enough bins for full n-gram (Need {self.n_gram}, got {len(bins)})") if debug else None
             return None  # Skip if not enough bins
 
         # Encode all bins first
@@ -128,11 +128,11 @@ class Raw_events_HDEncoder_Enhanced:
                 bin_hvs.append(bin_hv)
             else:
                 if self.debug:
-                    print(f"[DEBUG NGRAM] Skipping empty bin at time {idx}")
+                    print(f"[DEBUG NGRAM] Skipping empty bin at time {idx}") if debug else None
 
         if len(bin_hvs) < self.n_gram:
             if self.debug:
-                print(f"[WARNING] Skipping window: Only {len(bin_hvs)} valid bins, needs at least {self.n_gram}")
+                print(f"[WARNING] Skipping window: Only {len(bin_hvs)} valid bins, needs at least {self.n_gram}") if debug else None
             return None  # Skip incomplete N-grams
 
         #  Ensure `bin_hvs` is a tensor before passing to `ngrams()`
@@ -147,7 +147,7 @@ class Raw_events_HDEncoder_Enhanced:
         else:
             window_hv = torchhd.multiset(ngram_hvs)  # Ensures proper bundling
 
-        if self.debug:
+        if debug:
             print(f"[DEBUG NGRAM] Processed {len(bin_hvs)} valid bins into {self.n_gram}-grams")
             print(f"[DEBUG NGRAM] ngram_hvs shape: {ngram_hvs.shape}")
 
@@ -162,11 +162,11 @@ class Raw_events_HDEncoder_Enhanced:
         total_duration = last_t - first_t if total_events > 0 else 0
 
         expected_windows = max(1, (total_duration - self.OVERLAP_MS) // (self.WINDOW_SIZE_MS - self.OVERLAP_MS) + 1)
-
-        print(f"\n[INFO] Encoding Sample | Class: {class_id} | Total Events: {total_events}")
-        print(f"      - First Timestamp: {first_t}, Last Timestamp: {last_t}")
-        print(f"      - Total Duration: {total_duration} ms")
-        print(f"      - Expected Windows: {expected_windows}")
+        if debug:
+            print(f"\n[INFO] Encoding Sample | Class: {class_id} | Total Events: {total_events}")
+            print(f"      - First Timestamp: {first_t}, Last Timestamp: {last_t}")
+            print(f"      - Total Duration: {total_duration} ms")
+            print(f"      - Expected Windows: {expected_windows}")
 
         # Assign events to time bins
         temporal_dict = defaultdict(list)
@@ -185,7 +185,7 @@ class Raw_events_HDEncoder_Enhanced:
             # **Clear caches after each window**
             self.clear_temporary_cache()
 
-        print(f"[INFO] Sample {class_id} - Created: {len(event_hvs)} windows\n")
+        print(f"[INFO] Sample {class_id} - Created: {len(event_hvs)} windows\n") if debug else None
         return event_hvs
 
     def clear_temporary_cache(self):
@@ -194,4 +194,4 @@ class Raw_events_HDEncoder_Enhanced:
         self.pixel_hvs.clear()  # Clear spatial hypervectors (except seed ones)
         gc.collect()
 
-        print("[DEBUG] Cleared temporary caches after processing window.")
+        print("[DEBUG] Cleared temporary caches after processing window.") if debug else None

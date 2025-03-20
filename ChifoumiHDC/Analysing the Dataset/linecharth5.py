@@ -4,9 +4,9 @@ import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 '''H5 form prophesee!!'''
-dataset_folder = "/space/chair-nas/tosy/Gen3_Chifoumi_H5_HistoQuantized/train/"
+dataset_folder = "/space/chair-nas/tosy/DATASETS/Gen3_Chifoumi_H5_HistoQuantized/train/"
 gesture_class = 2
-num_samples = 60
+num_samples = 20
 sort_by_duration = True  #shortest to longest
 
 all_h5_files = sorted(glob.glob(f"{dataset_folder}/*.h5"))

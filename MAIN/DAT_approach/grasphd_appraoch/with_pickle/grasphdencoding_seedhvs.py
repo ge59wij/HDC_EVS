@@ -26,14 +26,16 @@ class seedEncoder:
         self.H_I_off = -self.H_I_on
 
         self._precompute_corners()  # Initialize position-based hypervectors
-        self._generate_time_hvs()  # Initialize time hypervectors
         print("| Generated Polarity and Position HVs |")
+        if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation"]:
+                self._generate_time_hvs()  # Initialize time hypervectors
+
+
 
     def _generate_time_hvs(self):
         """Precompute time hypervectors for efficient lookup."""
         self.time_hvs = {}
         num_bins = int(self.max_time // self.time_subwindow) + 2
-
         if self.time_interpolation_method in ["stem_hd", "event_hd_timeinterpolation"]:
             # Generate anchor hypervectors at time bin edges
             for i in range(num_bins):
@@ -41,10 +43,10 @@ class seedEncoder:
                 self.time_hvs[time_key] = torchhd.random(1, self.dims, "MAP", device=self.device).squeeze(0)
 
             # Interpolation between time hypervectors
-            for i in range(num_bins - 1):
+            for i in range(0, (num_bins - 1) * 10_000, 10_000):
+
                 T_iK = self.time_hvs[i * self.time_subwindow]
                 T_next = self.time_hvs[(i + 1) * self.time_subwindow]
-
                 for t in range(1, self.time_subwindow):
                     alpha = t / self.time_subwindow  # Interpolation factor
                     if self.time_interpolation_method == "stem_hd":
@@ -53,9 +55,7 @@ class seedEncoder:
                     else:
                         interpolated_hv = (1 - alpha) * T_iK + alpha * T_next
                     self.time_hvs[(i * self.time_subwindow) + t] = interpolated_hv
-
             print(f"| Precomputed {len(self.time_hvs)} total time hypervectors (anchors + interpolations).")
-
         elif self.time_interpolation_method == "event_hd_timepermutation":
             print("| Using Temporal Permutation Encoding EVENTHD |")
 

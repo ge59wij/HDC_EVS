@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib.cm as cm
 
-file_path = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/val/scissors_left_far_slow_standing_recording_017_2021-09-14_14-52-41.h5"  #input("Enter HDF5 file path: ")
+file_path = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/train/paper_200211_140644_0_0.h5" #input("Enter HDF5 file path: ")
 with h5py.File(file_path, "r") as f:
     event_data = f["data"][:]  # Shape: (T, 2, H, W)
     class_id = f["class_id"][()]
