@@ -379,19 +379,17 @@ with h5py.File(H5_SAMPLE, "r") as f:
 import h5py
 import numpy as np
 
-# Change this to any sample file from your dataset
 file_path = "/space/chair-nas/tosy/H5_Custom_HistoChifoumi/processed/Bin Labeled/VAL BIN LABELED/paper_left_far_slow_sitting_recording_023_2021-09-14_15-28-09.h5"
 
 with h5py.File(file_path, "r") as f:
     event_data = f["data"][:]  # Shape: (T, 2, H, W)
 
-# Print statistics
+
 print(f"Shape: {event_data.shape}")
 print("Min value:", event_data.min())
 print("Max value:", event_data.max())
-print("Unique values (if few):", np.unique(event_data)[:20])  # Print first 20 unique values
+print("Unique values (if few):", np.unique(event_data)[:20])
 
-# Print a small sample of the data
 print("Sample values from first time bin:")
-print(event_data[0])  # First time bin
+print(event_data[0]) 
 
