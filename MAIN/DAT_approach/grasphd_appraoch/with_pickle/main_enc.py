@@ -197,8 +197,7 @@ if __name__ == "__main__":
     dataset_test = load__dataset(dataset_path, test_split, max_samples_test, dataset_name)
 
 
-
-    experiment_root = create_experiment_root("/space/chair-nas/tosy/experiments/Chifoumi")
+    experiment_root = create_experiment_root("/space/chair-nas/tosy/experiments/Chifoumi2")
 
     #  Set baseline parameters
     baseline_params = {
@@ -213,7 +212,7 @@ if __name__ == "__main__":
     # ["event_hd_timepermutation", "stem_hd" , ""]
     # ["thermometer", "linear", "kxk_ngram"]
     # Encoding methods to test
-    encoding_methods = [ "kxk_ngram", "linear", "thermometer",  "kxk_ngram" ,"event_hd_timepermutation", "event_hd_timeinterpolation"]
+    encoding_methods = [ "event_hd_timepermutation", "event_hd_timeinterpolation"]
 
     # Parameters to test
     param_grid = {
@@ -222,10 +221,10 @@ if __name__ == "__main__":
         "overlap_ms": [0, 20_000],
         "k": [5, 9, 20],
         "timewindow": [50_000, 90_000],
-        "ngram": [4, 5, 9]
+        "ngram": [4]
     }
 
-    datasets = ["nmnist"]
+    datasets = ["chifoumi"]
 
     # Run experiments
     for dataset_name in datasets:
