@@ -17,8 +17,6 @@ import gc
 from collections import defaultdict
 
 
-# ==================== Encoding Function ==================== #
-
 def encode_dataset(dataset, encoder, split_name, device="cuda"):
     encoded_vectors, class_labels = [], []
 
@@ -31,9 +29,6 @@ def encode_dataset(dataset, encoder, split_name, device="cuda"):
     class_labels = torch.tensor(class_labels, dtype=torch.long, device=device)
 
     return encoded_vectors, class_labels
-
-
-# ==================== Training & Testing ==================== #
 
 def train_model(encoded_vectors, class_labels, method, debug, d):
     device = encoded_vectors.device
@@ -90,7 +85,6 @@ def _test_model(model, encoded_test, test_labels):
     return acc, preds.tolist()
 
 
-# ==================== Visualization ==================== #
 
 def plot_confusion_matrix(true_labels, pred_labels, save, run_folder, split_name):
     """Generates a confusion matrix and saves it automatically."""
@@ -153,13 +147,12 @@ def plot_heatmap(vectors, labels, k, Timewindow, dims, max_samples, encodingmeth
     save_plot(run_folder, f"{split_name}_{encodingmethod}_heatmap.png")
 
 
-# ==================== Saving Functions ==================== #
 
 def save_plot(run_folder, filename):
     """Saves the current plot to the specified folder without showing it."""
     os.makedirs(run_folder, exist_ok=True)
     plt.savefig(os.path.join(run_folder, filename), bbox_inches="tight")
-    print(f"✅ [SAVED] Plot saved: {filename}")
+    print(f"[SAVED] Plot saved: {filename}")
     plt.close()
 
 
@@ -170,7 +163,7 @@ def save_hyperparameters(run_folder, params):
     with open(param_file, "w") as f:
         for key, value in params.items():
             f.write(f"{key}: {value}\n")
-    print(f"✅ [SAVED] Hyperparameters saved to: {param_file}")
+    print(f"[SAVED] Hyperparameters saved to: {param_file}")
 
 
 def create_experiment_root(base_path):
@@ -184,13 +177,13 @@ def create_experiment_root(base_path):
 
     experiment_folder = os.path.join(base_path, f"run_{new_run:03d}")
     os.makedirs(experiment_folder)
-    print(f"✅ [INFO] Experiment root created at: {experiment_folder}")
+    print(f"[INFO] Experiment root created at: {experiment_folder}")
     return experiment_folder
 def create_unique_run_folder(experiment_root, encoding_method, param_name, param_value,dataset):
     """Creates a unique run folder inside the current experiment root."""
     run_folder = os.path.join(experiment_root, encoding_method, f"{param_name}_{param_value}_{dataset}")
     os.makedirs(run_folder, exist_ok=True)
-    print(f"✅ [INFO] Run folder created at: {run_folder}")
+    print(f" [INFO] Run folder created at: {run_folder}")
     return run_folder
 
 
@@ -199,10 +192,9 @@ def save_pickle_file(run_folder, filename, data):
     os.makedirs(run_folder, exist_ok=True)
     with open(os.path.join(run_folder, filename), "wb") as f:
         pickle.dump(data, f)
-    print(f"✅ [SAVED] {filename} file saved")
+    print(f" [SAVED] {filename} file saved")
 
 
-# ==================== Garbage Collection ==================== #
 
 def clear_cache():
     """Clears memory cache for fresh runs."""
